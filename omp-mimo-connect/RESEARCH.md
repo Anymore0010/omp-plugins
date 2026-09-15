@@ -1,7 +1,7 @@
 # Xiaomi MiMo 客户端模型 API 逆向笔记
 
 > 用途：为 `omp-mimo-connect`（仿 `omp-workbuddy-connect`）提供上游协议事实。
-> 采集环境：Windows 11，MiMo Desktop **26.914.142245**（domestic / CN），已登录小米账号 `<uid 已脱敏>`。
+> 采集环境：Windows 11，MiMo Desktop **26.914.142245**（domestic / CN），已登录小米账号（uid 已脱敏）。
 > 采集方式：静态分析 `app.asar` 字符串 + 本机 AppData 配置/日志 + 本地端口探测。**未抓包、未改客户端。**
 
 ---
@@ -13,11 +13,11 @@
 | 安装目录 | `D:\Program Files\Xiaomi MiMo\` |
 | 主程序 | `D:\Program Files\Xiaomi MiMo\Xiaomi MiMo.exe` |
 | asar | `D:\Program Files\Xiaomi MiMo\resources\app.asar`（约 100 MB） |
-| userData | `<用户主目录>\AppData\Roaming\Xiaomi MiMo\` |
+| userData | `C:\Users\<user>\AppData\Roaming\Xiaomi MiMo\` |
 | 账号 Cookie 分区 | `...\Xiaomi MiMo\Partitions\xiaomi-account\` |
 | 引擎配置 | `...\Xiaomi MiMo\engine-config\` |
 | mimocode 运行时数据 | `...\Xiaomi MiMo\mimocode\` |
-| 全局 mimocode 配置 | `<用户主目录>\.config\mimocode\` |
+| 全局 mimocode 配置 | `C:\Users\<user>\.config\mimocode\` |
 
 运行中的相关端口（会随重启变化）：
 
@@ -224,7 +224,7 @@ Authorization: Bearer {token}
 - 会过滤掉 embedding/tts/asr/whisper/rerank/ocr/audio/video/speech 等非 chat 模型
 - 本机缓存：`userData/model-catalog.json`
 
-当前本机 `model-catalog.json`（账号 <uid 已脱敏>）：
+当前本机 `model-catalog.json`（uid 已脱敏）：
 
 | id | name | modelType |
 | --- | --- | --- |
@@ -347,8 +347,8 @@ Authorization: Basic base64("opencode:" + MIMOCODE_SERVER_PASSWORD)
 
 1. **退出 MiMo Desktop**（必须，否则 Cookies 库锁着）
 2. 拷贝并解密：
-   - `<用户主目录>\AppData\Roaming\Xiaomi MiMo\Partitions\xiaomi-account\Network\Cookies`
-   - `<用户主目录>\AppData\Roaming\Xiaomi MiMo\Local State`
+   - `C:\Users\<user>\AppData\Roaming\Xiaomi MiMo\Partitions\xiaomi-account\Network\Cookies`
+   - `C:\Users\<user>\AppData\Roaming\Xiaomi MiMo\Local State`
    - 验证能解出 `passToken` / `userId`
 3. 用 curl 冒烟（只读、极短 prompt）：
 
@@ -385,7 +385,7 @@ curl -N https://mimo-server-cn.xiaomimimo.com/api/route/chat/completions \
 
 ```text
 xiaomi-last-confirmed.json
-  userId=<uid 已脱敏> displayName=<已脱敏> region=CN
+  userId=<已脱敏> displayName=<已脱敏> region=CN
 
 preferences.json
   model = "mimo-auto"
@@ -395,7 +395,7 @@ desktop-api.json
 
 日志关键行
   [user-auth] init ok requiresCnAccount=true cachedRegion=CN
-  [xiaomi-auth] probeStatus done kind=authenticated userId=<uid 已脱敏>
+  [xiaomi-auth] probeStatus done kind=authenticated userId=<已脱敏>
   [mimo][api] listening on 127.0.0.1:14471
   [model-catalog] xiaomi login not confirmed -> skip fetch, keep cache
   （注意：有一条 “login not confirmed” 与后面的 authenticated 并存，可能是启动时序问题；catalog 仍用缓存）
