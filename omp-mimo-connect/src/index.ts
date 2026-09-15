@@ -20,6 +20,7 @@
 
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent"
 import type { ProviderModelConfig } from "@oh-my-pi/pi-coding-agent"
+import { writeOwnedSso } from "./auth"
 import { MimoUpstreamClient } from "./upstream"
 import { MimoCredentialStore } from "./store"
 import { MimoShim } from "./server"
@@ -56,6 +57,10 @@ export default async function mimoConnect(pi: ExtensionAPI): Promise<void> {
     client,
     fallbackModels: FALLBACK_MIMO_MODELS,
   })
+
+  // Persist passToken rotations to the owned auth file (the in-memory object
+  // alone would lose them on restart, forcing a locked-cookie-store re-read).
+  client.onTokenMinted((credential) => writeOwnedSso(credential))
 
   try {
     const port = await shim.listen()

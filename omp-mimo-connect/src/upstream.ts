@@ -144,20 +144,41 @@ export class MimoUpstreamClient {
         body: bodyJson,
       })
     }
-    const token = await this.ensureServiceToken(credential)
     const obj = JSON.parse(bodyJson) as Record<string, unknown>
     if (typeof obj.model === "string") obj.model = normalizeModelName(obj.model)
-    return fetch(`${CN_API_BASE}/route/chat/completions`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Cookie: `serviceToken=${token}; userId=${credential.userId}`,
-        "User-Agent": CHAT_UA,
-        "X-Mimo-Source": X_MIMO_SOURCE,
-      },
-      body: JSON.stringify(obj),
-    })
+    const send = async (token: string): Promise<Response> =>
+      fetch(`${CN_API_BASE}/route/chat/completions`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: `serviceToken=${token}; userId=${credential.userId}`,
+          "User-Agent": CHAT_UA,
+          "X-Mimo-Source": X_MIMO_SOURCE,
+        },
+        body: JSON.stringify(obj),
+      })
+    // SERVICE_TOKEN_TTL_MS is a guess (upstream never discloses the lifetime);
+    // if the real one is shorter, a long omp session would 401 on every chat.
+    // Self-heal: on 401, drop the cached token, re-mint once, retry once.
+    let response = await send(await this.ensureServiceToken(credential))
+    if (response.status === 401) {
+      this.serviceToken = undefined
+      this.serviceTokenExpiresAtMs = 0
+      response = await send(await this.ensureServiceToken(credential))
+    }
+    this.afterMint?.(credential)
+    return response
   }
+
+  /**
+   * Invoked after a successful (or retried) token mint so the owner can
+   * persist passToken rotations; assignment alone only mutates memory.
+   */
+  onTokenMinted(hook: ((credential: Extract<MimoCredential, { kind: "sso" }>) => void) | undefined): void {
+    this.afterMint = hook
+  }
+
+  private afterMint: ((credential: Extract<MimoCredential, { kind: "sso" }>) => void) | undefined
 
   /**
    * Mint (or reuse) a serviceToken. Phase 1 renews passToken alongside, so a
