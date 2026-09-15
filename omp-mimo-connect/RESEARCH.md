@@ -13,11 +13,11 @@
 | 安装目录 | `D:\Program Files\Xiaomi MiMo\` |
 | 主程序 | `D:\Program Files\Xiaomi MiMo\Xiaomi MiMo.exe` |
 | asar | `D:\Program Files\Xiaomi MiMo\resources\app.asar`（约 100 MB） |
-| userData | `C:\Users\<user>\AppData\Roaming\Xiaomi MiMo\` |
+| userData | `%APPDATA%\Xiaomi MiMo\` |
 | 账号 Cookie 分区 | `...\Xiaomi MiMo\Partitions\xiaomi-account\` |
 | 引擎配置 | `...\Xiaomi MiMo\engine-config\` |
 | mimocode 运行时数据 | `...\Xiaomi MiMo\mimocode\` |
-| 全局 mimocode 配置 | `C:\Users\<user>\.config\mimocode\` |
+| 全局 mimocode 配置 | `~/.config/mimocode/` |
 
 运行中的相关端口（会随重启变化）：
 
@@ -347,8 +347,8 @@ Authorization: Basic base64("opencode:" + MIMOCODE_SERVER_PASSWORD)
 
 1. **退出 MiMo Desktop**（必须，否则 Cookies 库锁着）
 2. 拷贝并解密：
-   - `C:\Users\<user>\AppData\Roaming\Xiaomi MiMo\Partitions\xiaomi-account\Network\Cookies`
-   - `C:\Users\<user>\AppData\Roaming\Xiaomi MiMo\Local State`
+   - `%APPDATA%\Xiaomi MiMo\Partitions\xiaomi-account\Network\Cookies`
+   - `%APPDATA%\Xiaomi MiMo\Local State`
    - 验证能解出 `passToken` / `userId`
 3. 用 curl 冒烟（只读、极短 prompt）：
 
