@@ -1,4 +1,7 @@
 node_modules/
 out/
-_smoke.mjs
-package-lock.json
+*.mjs
+*.mts
+*.log
+tmp/
+.verify-out/
