@@ -25,10 +25,14 @@ const SSO_SID = "mimopc"
 const SSO_UA = "MiClaw/1.0"
 const CHAT_UA = "MiMo/26.914.142245 Chrome/132.0.0.0 Electron/35"
 const X_MIMO_SOURCE = "mimocode-cli-free"
-const ERROR_BODY_LIMIT = 4096
-/** Officially published default when no base_url accompanies an API key. */
-const DEFAULT_KEY_BASE = "https://api.xiaomimimo.com/v1"
-
+/**
+ * omp bounds extension `fetchDynamicModels` to 15 s and gates failed retries
+ * behind a 5-minute backoff, so the cold discovery chain (passport phase 1 ->
+ * phase 2 STS -> model list) must fit well inside that budget. Chat is
+ * exempt: streaming answers have no omp-side deadline.
+ */
+const DISCOVERY_TIMEOUT_MS = 5_000
+const CHAT_TIMEOUT_MS = 30_000
 export interface MimoUpstreamModel {
   id: string
   name: string
@@ -75,7 +79,7 @@ export class MimoUpstreamClient {
     if (credential.kind === "apikey") {
       const response = await fetch(`${credential.baseUrl.replace(/\/+$/, "")}/models`, {
         headers: { Authorization: `Bearer ${credential.apiKey}` },
-        signal: AbortSignal.timeout(30_000),
+        signal: AbortSignal.timeout(DISCOVERY_TIMEOUT_MS),
       })
       const parsed = await readJson(response)
       if (!response.ok || parsed === null || typeof parsed !== "object") {
@@ -102,7 +106,7 @@ export class MimoUpstreamClient {
     const token = await this.ensureServiceToken(credential)
     const response = await fetch(`${CN_API_BASE}/model/list`, {
       headers: { Cookie: `serviceToken=${token}; userId=${credential.userId}`, "User-Agent": CHAT_UA },
-      signal: AbortSignal.timeout(30_000),
+      signal: AbortSignal.timeout(DISCOVERY_TIMEOUT_MS),
     })
     const parsed = await readJson(response)
     if (!response.ok || parsed === null || typeof parsed !== "object") {
@@ -140,6 +144,7 @@ export class MimoUpstreamClient {
           "X-Mimo-Source": X_MIMO_SOURCE,
         },
         body: bodyJson,
+        signal: AbortSignal.timeout(CHAT_TIMEOUT_MS),
       })
     }
     const obj = JSON.parse(bodyJson) as Record<string, unknown>
@@ -154,6 +159,9 @@ export class MimoUpstreamClient {
           "X-Mimo-Source": X_MIMO_SOURCE,
         },
         body: JSON.stringify(obj),
+        // Streaming answers have no omp-side deadline; 30 s only bounds the
+        // time-to-first-byte so a dead upstream cannot hang the turn forever.
+        signal: AbortSignal.timeout(CHAT_TIMEOUT_MS),
       })
     // SERVICE_TOKEN_TTL_MS is a guess (upstream never discloses the lifetime);
     // if the real one is shorter, a long omp session would 401 on every chat.
@@ -187,7 +195,7 @@ export class MimoUpstreamClient {
     }
     const loginResponse = await fetch(
       `${PASSPORT_LOGIN}?sid=${SSO_SID}&_json=true`,
-      { headers: { Cookie: passportCookieHeader(credential), "User-Agent": SSO_UA }, signal: AbortSignal.timeout(30_000) },
+      { headers: { Cookie: passportCookieHeader(credential), "User-Agent": SSO_UA }, signal: AbortSignal.timeout(DISCOVERY_TIMEOUT_MS) },
     )
     const loginText = await loginResponse.text()
     const marker = "&&&START&&&"
@@ -219,7 +227,7 @@ export class MimoUpstreamClient {
     // Phase 2 must NOT carry cookies — the STS endpoint rejects them (401).
     const stsResponse = await fetch(`${location}&clientSign=${sign}`, {
       headers: { "User-Agent": SSO_UA },
-      signal: AbortSignal.timeout(30_000),
+      signal: AbortSignal.timeout(DISCOVERY_TIMEOUT_MS),
     })
     if (!stsResponse.ok) {
       throw new Error(`mimo STS exchange failed (http ${stsResponse.status})`)
@@ -248,4 +256,3 @@ export class MimoUpstreamClient {
   }
 }
 
-export { DEFAULT_KEY_BASE }
