@@ -18,3 +18,19 @@ export const FALLBACK_MIMO_MODELS: readonly MimoUpstreamModel[] = [
   model("mimo-x-pro-preview", "MiMo-X-Pro-Preview", 1.0),
   model("mimo-x-flash-preview", "MiMo-X-Flash-Preview", 0.4),
 ]
+
+/**
+ * Merge the live TEXT roster with the wire-valid aliases. The upstream
+ * `/model/list` answer omits `mimo-auto` (rejected by the CN route) and the
+ * `mimo-pro`/`mimo-flash` aliases (which the server routes to the
+ * `mimo-x-*-preview` ids), yet those aliases are exactly what works on the
+ * wire — dropping them breaks omp sessions pinned to `mimo/mimo-pro`.
+ * Dedupe by id; live metadata wins on conflict.
+ */
+export function mergeWithAliases(live: readonly MimoUpstreamModel[]): MimoUpstreamModel[] {
+  const byId = new Map(live.map((m) => [m.id, m]))
+  for (const alias of FALLBACK_MIMO_MODELS) {
+    if (!byId.has(alias.id)) byId.set(alias.id, alias)
+  }
+  return [...byId.values()]
+}

@@ -11,6 +11,7 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http"
 import type { MimoCredentialStore } from "./store"
 import type { MimoUpstreamClient, MimoUpstreamModel } from "./upstream"
+import { mergeWithAliases } from "./catalog"
 import { normalizeModelName } from "./upstream"
 
 export interface MimoShimOptions {
@@ -59,7 +60,7 @@ export class MimoShim {
           return this.options.client.fetchModels(credential)
         })
         .then((models) => {
-          if (models !== undefined && models.length > 0) this.catalog = models
+          if (models !== undefined && models.length > 0) this.catalog = mergeWithAliases(models)
         })
         .catch(() => {
           // keep fallback catalog; upstream is offline or not signed in
@@ -75,8 +76,8 @@ export class MimoShim {
     try {
       const models = await this.options.client.fetchModels(credential)
       if (models.length > 0) {
-        this.catalog = models
-        return models
+        this.catalog = mergeWithAliases(models)
+        return this.catalog
       }
     } catch {
       // keep current catalog

@@ -122,9 +122,7 @@ export class MimoUpstreamClient {
       const id = m.modelName
       if (typeof id !== "string" || id === "") continue
       const name = typeof m.description === "string" && m.description !== "" ? m.description : id
-      const ratio = m.ratio !== null && typeof m.ratio === "object" ? (m.ratio as Record<string, unknown>) : {}
       const rate = typeof m.displayRatio === "number" ? m.displayRatio : 0
-      void ratio
       models.push({ id, name, rate, contextWindow: 1_000_000, maxTokens: 128_000 })
     }
     if (models.length === 0) throw new Error("mimo model list resolved to an empty chat roster")
@@ -166,7 +164,6 @@ export class MimoUpstreamClient {
       this.serviceTokenExpiresAtMs = 0
       response = await send(await this.ensureServiceToken(credential))
     }
-    this.afterMint?.(credential)
     return response
   }
 
@@ -240,8 +237,12 @@ export class MimoUpstreamClient {
     }
     this.serviceToken = token
     this.serviceTokenExpiresAtMs = Date.now() + SERVICE_TOKEN_TTL_MS
-    if (typeof phase1.passToken === "string" && phase1.passToken !== "") {
+    if (typeof phase1.passToken === "string" && phase1.passToken !== "" && phase1.passToken !== credential.passToken) {
       credential.passToken = phase1.passToken
+      // Persist the rotation; assignment alone only mutates memory. Fired on
+      // actual mints (not per chat) so the credential file is not rewritten
+      // on the hot path.
+      this.afterMint?.(credential)
     }
     return token
   }
