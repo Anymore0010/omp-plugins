@@ -194,7 +194,8 @@ export function readDesktopSsoCredential(): MimoCredential | undefined {
   let decryptor: Decryptor
   try {
     decryptor = windowsDecryptor()
-  } catch {
+  } catch (error) {
+    console.error("[mimo-connect] decryptor init failed:", error instanceof Error ? error.message : error)
     return undefined
   }
   const localStateDir = desktopUserDataCandidates()[0]
@@ -202,12 +203,27 @@ export function readDesktopSsoCredential(): MimoCredential | undefined {
   let db: Buffer
   try {
     db = readFileSync(cookiesPathOf(localStateDir))
-  } catch {
+  } catch (error) {
+    console.error("[mimo-connect] cookies read failed:", error instanceof Error ? error.message : error)
     return undefined
   }
   const found = readCookiesFromSnapshot(db, decryptor)
   if (found === undefined) return undefined
   return { kind: "sso", ...found, source: "cookies" }
+}
+
+/**
+ * Best-effort temp-dir removal. On Windows the sqlite handle can outlive
+ * `conn.close()` (GC lag), making rmSync throw EBUSY — that must never
+ * propagate: the credential is already in hand and a stale temp dir is
+ * harmless (OS temp cleanup reaps it).
+ */
+function rmTempDirQuietly(dir: string): void {
+  try {
+    rmSync(dir, { recursive: true, force: true })
+  } catch {
+    // stale temp dir is harmless; skip
+  }
 }
 
 function readCookiesFromSnapshot(db: Buffer, decryptor: Decryptor): { passToken: string; userId: string; cUserId?: string } | undefined {
@@ -225,10 +241,10 @@ function readCookiesFromSnapshot(db: Buffer, decryptor: Decryptor): { passToken:
       conn.close()
     }
   } catch {
+    rmTempDirQuietly(dir)
     return undefined
-  } finally {
-    rmSync(dir, { recursive: true, force: true })
   }
+  rmTempDirQuietly(dir)
   const out: Record<string, string> = {}
   for (const row of rows) {
     if (out[row.name] !== undefined) continue
