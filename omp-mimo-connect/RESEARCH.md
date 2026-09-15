@@ -464,10 +464,15 @@ desktop-api.json
    （修法：memoize promise 而非值）。注意 `inflight ??= resolve()` 同样会缓存
    **被拒绝**的 promise——失败必须清 memo 让下一轮重试。
 3. **Bun 下 sqlite 临时文件句柄存活过 `conn.close()`**：`rmSync(tempdir)` 抛
-   EBUSY，Windows 上重试约 30s 才失败——每轮聊天烧 ~31s 后 502。清理必须
-   best-effort（`rmTempDirQuietly` 吞掉，泄漏的临时目录交给系统回收）。Bun
-   疑似不继承 Node 的 `execFileSync(..., {input})` 语义——若 DPAPI 解包在宿主内
-   挂起，改为把 base64 写临时文件经 `$args[0]` 传入而非 stdin。
+   EBUSY（`rmSync` 无 `maxRetries` 时立即抛，不可能自己烧 30s），这是可见症状。
+   ~31s/轮的主因**未分段计时证实**，时间线（22:54:05→22:54:37 = 31.6s）指向
+   DPAPI 的 `execFileSync("powershell.exe", ..., { timeout: 30_000 })`——Bun 疑似
+   不继承 Node 的 `execFileSync(..., {input})` 语义，PowerShell 阻塞在
+   `[Console]::In.ReadToEnd()` 直到 30s 超时，然后这条路才走到 rmSync 崩在
+   EBUSY。清理必须 best-effort（`rmTempDirQuietly` 吞掉，泄漏的临时目录交给
+   系统回收）。若冷路径（新装无 owned 副本）确证 DPAPI 耗时 30s，改成把 base64
+   写临时文件经 `$args[0]` 传入（既是测试也是修复）；否则冷路径 30s 会顶穿
+   omp 的 15s `fetchDynamicModels` 预算，首装一直降级到兜底目录 + 5 分钟退避。
 
 **排查经验**：直接看 `~/.omp/logs/omp.<date>.<pid>.log`（`agent turn ended with
 provider error` 带完整 errorMessage）；扩展的 `console.error` 会出现在 `omp -p`
