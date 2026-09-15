@@ -432,6 +432,17 @@ desktop-api.json
 5. **macOS/Linux partition 路径**：与 §1.1 一致；解密未实现（Keychain/kwallet），
    这两个平台走 API Key 路径。
 6. safeStorage 回退：与本插件无关（只读 Cookie 库，不复现 safeStorage）。
+7. **运行时锁实测（Node/libuv）**：MiMo 运行中时 `readFileSync(Cookies)` 直接
+   `EBUSY`（早前 PowerShell `FileStream`/`esentutl` 的"锁死"结论对 Node 同样成立；
+   曾有一次"copy OK"实为 exe 未启动的假阳性）。因此零配置 SSO 的可用条件是：
+   **首次读取需 MiMo 关闭**，之后凭据副本（`~/.omp/.mimo-auth.json`）覆盖重启场景
+   （含 MiMo 运行中）。passToken 是小米账号级主令牌（可铸任意 sid 的
+   serviceToken），比 workbuddy 的 accessToken 敏感得多——仅缓存于本机用户目录，
+   不做其他落盘。
+8. **401 自愈**：`SERVICE_TOKEN_TTL_MS`（6h）是猜测值（上游不公开真实寿命）。
+   `chatStream` 遇 401 时丢弃缓存 token、重铸一次并重试一次；
+   `onTokenMinted` 钩子把 Phase 1 返回的 passToken 轮换持久化到 owned 副本
+   （否则轮换只改内存对象，重启即失）。
 
 ### 实现状态（omp-mimo-connect 0.1.0）
 
