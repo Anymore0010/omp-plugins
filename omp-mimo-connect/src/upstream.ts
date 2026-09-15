@@ -28,11 +28,13 @@ const X_MIMO_SOURCE = "mimocode-cli-free"
 /**
  * omp bounds extension `fetchDynamicModels` to 15 s and gates failed retries
  * behind a 5-minute backoff, so the cold discovery chain (passport phase 1 ->
- * phase 2 STS -> model list) must fit well inside that budget. Chat is
- * exempt: streaming answers have no omp-side deadline.
+ * phase 2 STS -> model list) must degrade to the fallback catalog BEFORE omp's
+ * timeout marks the row non-authoritative. 3 x 4 s leaves slack for TLS
+ * handshakes and store resolution (DPAPI spawn + cookie copy on cold reads).
+ * Chat carries no signal at all: undici aborts the in-flight body too, which
+ * would truncate streaming answers mid-generation.
  */
-const DISCOVERY_TIMEOUT_MS = 5_000
-const CHAT_TIMEOUT_MS = 30_000
+const DISCOVERY_TIMEOUT_MS = 4_000
 export interface MimoUpstreamModel {
   id: string
   name: string
@@ -136,6 +138,11 @@ export class MimoUpstreamClient {
   /** POST the chat endpoint; returns the raw (SSE or JSON) Response. */
   async chatStream(credential: MimoCredential, bodyJson: string): Promise<Response> {
     if (credential.kind === "apikey") {
+      // No signal on the stream: undici's AbortSignal.timeout aborts the
+      // in-flight body too, truncating any answer past the deadline — and
+      // 128k-output agent turns routinely exceed 30 s. Dead-socket hazards
+      // are covered by the shim's listener catch. Mirrors the sibling
+      // workbuddy-connect chatStream.
       return fetch(`${credential.baseUrl.replace(/\/+$/, "")}/chat/completions`, {
         method: "POST",
         headers: {
@@ -144,7 +151,6 @@ export class MimoUpstreamClient {
           "X-Mimo-Source": X_MIMO_SOURCE,
         },
         body: bodyJson,
-        signal: AbortSignal.timeout(CHAT_TIMEOUT_MS),
       })
     }
     const obj = JSON.parse(bodyJson) as Record<string, unknown>
@@ -159,9 +165,7 @@ export class MimoUpstreamClient {
           "X-Mimo-Source": X_MIMO_SOURCE,
         },
         body: JSON.stringify(obj),
-        // Streaming answers have no omp-side deadline; 30 s only bounds the
-        // time-to-first-byte so a dead upstream cannot hang the turn forever.
-        signal: AbortSignal.timeout(CHAT_TIMEOUT_MS),
+        // No total-request deadline — see the apikey branch note.
       })
     // SERVICE_TOKEN_TTL_MS is a guess (upstream never discloses the lifetime);
     // if the real one is shorter, a long omp session would 401 on every chat.
