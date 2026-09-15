@@ -451,6 +451,29 @@ desktop-api.json
 与计划的差异：Windows DPAPI 解包用一次性 PowerShell `ProtectedData::Unprotect`
 （结果缓存，无原生依赖）；nonce 从原始 JSON 文本提取（见上）。
 
+### 扩展宿主内调试实录（omp -p 全链路 401/502/挂起，2026-09-15）
+
+插件在 omp 内与 standalone Node 表现不一致的三层原因，均已定位：
+
+1. **扩展跑在 Bun 里**（omp 是 Bun single-file executable，日志可见
+   `B:\~BUN\root\omp-windows-x64`）——所有 standalone Node 冒烟都不是权威验证，
+   复现必须在 `bun` 下跑；且 Bun 的 `fetch` 遵循 `HTTPS_PROXY` 而 Node 不会
+   （本机设了代理，repro 时注意隔离）。
+2. **竞态锁死**：`listen()` 启动时后台调 `store.current()`，omp 的首个请求并发
+   到来时旧代码"先置 resolved=true 再 await"使并发方拿到 undefined 并永久锁死
+   （修法：memoize promise 而非值）。注意 `inflight ??= resolve()` 同样会缓存
+   **被拒绝**的 promise——失败必须清 memo 让下一轮重试。
+3. **Bun 下 sqlite 临时文件句柄存活过 `conn.close()`**：`rmSync(tempdir)` 抛
+   EBUSY，Windows 上重试约 30s 才失败——每轮聊天烧 ~31s 后 502。清理必须
+   best-effort（`rmTempDirQuietly` 吞掉，泄漏的临时目录交给系统回收）。Bun
+   疑似不继承 Node 的 `execFileSync(..., {input})` 语义——若 DPAPI 解包在宿主内
+   挂起，改为把 base64 写临时文件经 `$args[0]` 传入而非 stdin。
+
+**排查经验**：直接看 `~/.omp/logs/omp.<date>.<pid>.log`（`agent turn ended with
+provider error` 带完整 errorMessage）；扩展的 `console.error` 会出现在 `omp -p`
+终端 stderr，日志与 stderr 交叉验证。owned-cache-first（7 天内副本则不再碰
+Cookie 库）已落地，宿主内解析从 ~31s/次降到一次文件读。
+
 ---
 
 *文档生成时间：采集会话内。若 MiMo 升级 major，先复查 asar 中 `$7`、`X-Mimo-Source`、`/route/chat/completions` 三处字符串。*
