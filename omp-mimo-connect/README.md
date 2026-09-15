@@ -57,9 +57,10 @@ shim 暴露两个只读端点（仅 loopback）：
 
 兜底目录（上游离线时可见）：`mimo-auto`（别名）、`mimo-pro`、`mimo-flash`、
 `mimo-x-pro-preview`、`mimo-x-flash-preview`。登录成功后由上游
-`/api/model/list`（仅 `TEXT` 类型）替换——CN SSO 档当前实为两个
-`mimo-x-*-preview`。cost 列显示的是 `displayRatio` 相对比率（SSO 档 0 = free），
-非美元计价。
+`/api/model/list`（仅 `TEXT` 类型）**合并增强**（不替换）：live 模型 +
+wire 有效别名（`mimo-auto` 虽被 CN 路由拒绝，shim 会改写为 `mimo-pro`）——
+CN SSO 档 live 实为两个 `mimo-x-*-preview`。cost 列显示的是 `displayRatio`
+相对比率（SSO 档 0 = free），非美元计价。
 
 ## 风险与限制
 
