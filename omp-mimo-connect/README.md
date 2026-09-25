@@ -33,18 +33,33 @@ shim 的工作只有三件：
 另有 API Key 回退路径：`MIMO_API_KEY` / `XIAOMI_API_KEY` 环境变量，或
 `~/.omp/.mimo-auth.json`（官方 `auth.json` 形状：`{"xiaomi":{"type":"api","key":"sk-...","metadata":{"base_url":"..."}}}`）。
 
+## 安装
+
+方式 A —— 从 marketplace 安装（推荐）：
+
+```bash
+omp plugin marketplace add Anymore0010/omp-plugins
+omp plugin install omp-mimo-connect@omp-plugins
+```
+
+方式 B —— 本地开发：
+
+```bash
+omp plugin link <本目录绝对路径>          # 需 Windows 开发者模式或管理员
+```
+
+方式 C —— 若 `omp plugin link` 因符号链接权限（EPERM）不可用，在 `~/.omp/agent/config.yml` 顶层加本目录绝对路径：
+
+```yaml
+extensions:
+  - D:/Projects/omp-plugins/omp-mimo-connect
+```
+
 ## 使用
 
-1. 安装（二选一）：
-   - `omp plugin link <本目录绝对路径>`（需 Windows 开发者模式或管理员）
-   - 在 `~/.omp/agent/config.yml` 顶层加：
-     ```yaml
-     extensions:
-       - D:/Projects/omp-plugins/omp-mimo-connect
-     ```
-2. 关闭 MiMo 桌面版（首次读取 Cookie 时必须），启动 omp。
-3. `/model` 里选 `mimo/mimo-pro` 或 `mimo/mimo-x-flash-preview`。
-4. 模型列表强刷：`/mimo-refresh`（绕过 omp 对扩展动态模型发现的 24h 缓存）。
+1. 关闭 MiMo 桌面版（首次读取 Cookie 时必须），启动 omp。
+2. `/model` 里选 `mimo/mimo-pro` 或 `mimo/mimo-x-flash-preview`。
+3. 模型列表强刷：`/mimo-refresh`（绕过 omp 对扩展动态模型发现的 24h 缓存）。
 
 ## 状态检查
 

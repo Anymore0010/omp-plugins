@@ -45,10 +45,17 @@ omp 对 `fetchDynamicModels` 的动态列表有 **24 小时缓存**：正常打�
 
 ## 安装
 
-在终端中，指向本目录执行：
+### 方式 A：从 marketplace 安装（推荐）
 
 ```bash
-cd /path/to/omp-workbuddy-connect
+omp plugin marketplace add Anymore0010/omp-plugins
+omp plugin install omp-workbuddy-connect@omp-plugins
+```
+
+### 方式 B：本地开发
+
+```bash
+cd /path/to/omp-plugins/omp-workbuddy-connect
 omp plugin link .
 ```
 
@@ -61,11 +68,11 @@ omp plugin doctor omp-workbuddy-connect   # 观察是否出现 "plugin: ... ok"
 
 启动新的 omp 会话（`omp`），打开 `/model`，选择 `workbuddy/glm-5.3` 或任意 WorkBuddy 模型。
 
-> 注：在 Windows 上若 `omp plugin link` 因符号链接权限（EPERM）失败（未开启「开发人员模式」或以非管理员身份运行），可改用下方方式：把绝对路径写进 `~/.omp/agent/config.yml`：
+> 注：在 Windows 上若 `omp plugin link` 因符号链接权限（EPERM）失败（未开启「开发人员模式」或以非管理员身份运行），可改用方式 C：把本目录绝对路径写进 `~/.omp/agent/config.yml`（marketplace 克隆与 monorepo 里都适用）：
 >
 > ```yaml
 > extensions:
->   - /path/to/omp-workbuddy-connect
+>   - /path/to/omp-plugins/omp-workbuddy-connect
 > ```
 
 ## 开发

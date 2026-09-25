@@ -1,12 +1,13 @@
 # AGENTS.md — omp-workbuddy-connect
 
-把 WorkBuddy 桌面版模型接入 [omp](https://omp.sh/) 的扩展。本文件是本仓库的**发布与版本更新规范**，在任何一台电脑上操作都必须遵循同一流程，保证两台机器产出的版本一致。
+把 WorkBuddy 桌面版模型接入 [omp](https://omp.sh/) 的扩展。本文件是该**插件子目录**的开发与发布规范；仓库级规范（提交身份、marketplace 目录、tag 命名）见上级 [`../AGENTS.md`](../AGENTS.md)，两者冲突时以本文件对该插件的约定为准。
 
 ## 仓库概览
 
-- **远程仓库**：`https://github.com/Anymore0010/omp-workbuddy-connect.git`
+- **所属仓库**：`https://github.com/Anymore0010/omp-plugins`（marketplace monorepo），本插件位于其 `omp-workbuddy-connect/` 子目录
+- **marketplace 名称**：`omp-plugins`；用户安装为 `omp plugin install omp-workbuddy-connect@omp-plugins`
 - **默认分支**：`main`
-- **包名 / 版本**：`omp-workbuddy-connect`，版本号在 `package.json` 的 `version` 字段
+- **包名 / 版本**：`omp-workbuddy-connect`，版本号在 `package.json` 的 `version` 字段（同时必须同步到仓库根的 `.omp-plugin/marketplace.json`）
 - **运行时依赖**：无。扩展只用 Node 内置模块（`node:os/path/fs/http`）；`@oh-my-pi/pi-coding-agent` 仅作**类型**导入（运行时被擦除）。因此**分发物不需要 `node_modules`**。
 - **目录结构**：
   - `src/index.ts` — 扩展入口，`pi.registerProvider("workbuddy", …)` + `/workbuddy-refresh` 命令
@@ -58,6 +59,10 @@ git log --format='author=%an <%ae> | committer=%cn <%ce>' -1
 ## 版本更新流程（两台机器一致）
 
 > ⚠️ 核心原则：**版本号、tag、Release、附件四者必须对应同一个 commit**。tag 一旦推送不要移动；出错就发新补丁版本（如 `v0.1.1` → `v0.1.2`）。
+>
+> ⚠️ **tag 必须带插件名前缀**：本插件用 `omp-workbuddy-connect-v0.1.4`，不要用裸 `v0.1.4`（会与同仓库的 `omp-mimo-connect` 撞名）。
+>
+> ⚠️ **本插件的版本号有两处，必须同步**：`omp-workbuddy-connect/package.json#version` 与仓库根 `.omp-plugin/marketplace.json` 中该条目的 `version`——后者缺失或不一致会让 `omp plugin upgrade` 与开机自动更新静默跳过。
 
 ### 1. 同步与改代码
 
@@ -76,9 +81,9 @@ node node_modules/typescript/lib/tsc.js --noEmit -p tsconfig.json
 `tsc` 必须以 exit 0 结束。扩展本身可在本机实测加载：
 
 ```bash
-omp models -e D:/Projects/omp-workbuddy-connect        # 应列出 workbuddy (N)
-# 或已 link 的情况下（仓库根目录）：
-cd /d/Projects/omp-workbuddy-connect && omp plugin link . && omp models | grep workbuddy
+omp models | grep workbuddy                            # 应列出 workbuddy (N)
+# 或临时指定入口：
+omp models -e D:/Projects/omp-plugins/omp-workbuddy-connect
 ```
 
 端到端调用（需本机 WorkBuddy 桌面版已登录）：
@@ -87,13 +92,14 @@ cd /d/Projects/omp-workbuddy-connect && omp plugin link . && omp models | grep w
 omp --model workbuddy/glm-5.3 -p "只回答：OK"
 ```
 
-### 3. 升版本号
+### 3. 升版本号（两处必须同步）
 
-只改 `package.json` 的 `version`（语义化版本）：
+改本插件的 `package.json` 的 `version`，并把同值写入仓库根 `.omp-plugin/marketplace.json` 中 `name == "omp-workbuddy-connect"` 条目的 `version`：
 
 ```bash
-# 例：0.1.1 → 0.1.2
-node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync('package.json'));p.version='0.1.2';fs.writeFileSync('package.json',JSON.stringify(p,null,2)+'\n')"
+# 例：0.1.3 → 0.1.4（在仓库根执行）
+node -e "const fs=require('fs');const f='omp-workbuddy-connect/package.json';const p=JSON.parse(fs.readFileSync(f));p.version='0.1.4';fs.writeFileSync(f,JSON.stringify(p,null,2)+'\n')"
+node -e "const fs=require('fs');const f='.omp-plugin/marketplace.json';const c=JSON.parse(fs.readFileSync(f));c.plugins.find(x=>x.name==='omp-workbuddy-connect').version='0.1.4';fs.writeFileSync(f,JSON.stringify(c,null,2)+'\n')"
 ```
 
 ### 4. 提交并推送
@@ -109,8 +115,8 @@ git push origin main
 ### 5. 打 tag 并推送
 
 ```bash
-git tag -a v0.1.2 -m "v0.1.2"
-git push origin v0.1.2
+git tag -a omp-workbuddy-connect-v0.1.4 -m "omp-workbuddy-connect v0.1.4"
+git push origin omp-workbuddy-connect-v0.1.4
 ```
 
 ### 6. 生成 portable zip（只用 git，跨平台一致）
@@ -118,8 +124,8 @@ git push origin v0.1.2
 **不要手工挑选文件**——用 `git archive` 从当前 commit 导出，保证与 tag 内容完全一致，也自动排除 `node_modules`、`*.mts` 等未跟踪/已忽略文件：
 
 ```bash
-# 在仓库根目录执行
-git archive --format=zip -o ../omp-workbuddy-connect-portable.zip --prefix=omp-workbuddy-connect/ HEAD
+# 在仓库根目录执行（:omp-workbuddy-connect 只打包本插件子目录）
+git archive --format=zip -o ../omp-workbuddy-connect-portable.zip --prefix=omp-workbuddy-connect/ HEAD:omp-workbuddy-connect
 ```
 
 产物：`../omp-workbuddy-connect-portable.zip`，解压后顶层目录为 `omp-workbuddy-connect/`。
@@ -129,8 +135,8 @@ git archive --format=zip -o ../omp-workbuddy-connect-portable.zip --prefix=omp-w
 **方式 A（推荐，需 `gh` CLI）**：
 
 ```bash
-gh release create v0.1.2 ../omp-workbuddy-connect-portable.zip \
-  --title "v0.1.2 — <标题>" \
+gh release create omp-workbuddy-connect-v0.1.4 ../omp-workbuddy-connect-portable.zip \
+  --title "omp-workbuddy-connect v0.1.4 — <标题>" \
   --notes "<变更说明>"
 ```
 
@@ -191,8 +197,9 @@ curl -s -H "Authorization: Bearer $GH_TOKEN" \
 ## 安装与分发（写进用户文档的用法）
 
 ```bash
-# Git 直装
-omp install github:Anymore0010/omp-workbuddy-connect
+# 从本仓库的 marketplace 安装（推荐）
+omp plugin marketplace add Anymore0010/omp-plugins
+omp plugin install omp-workbuddy-connect@omp-plugins
 
 # 或下载 Release 的 portable zip，解压后
 omp plugin link .

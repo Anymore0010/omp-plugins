@@ -1,0 +1,28 @@
+{
+  "name": "omp-plugins",
+  "owner": {
+    "name": "Anymore0010"
+  },
+  "metadata": {
+    "description": "omp extensions that bridge desktop-app model accounts into omp.",
+    "version": "1.0.0"
+  },
+  "plugins": [
+    {
+      "name": "omp-workbuddy-connect",
+      "source": "./omp-workbuddy-connect",
+      "version": "0.1.3",
+      "description": "把 WorkBuddy 桌面版模型接入 omp（零配置复用桌面端登录态）。",
+      "license": "MIT",
+      "category": "provider"
+    },
+    {
+      "name": "omp-mimo-connect",
+      "source": "./omp-mimo-connect",
+      "version": "0.1.0",
+      "description": "把小米 MiMo 桌面版模型接入 omp（零配置复用小米账号登录态）。",
+      "license": "MIT",
+      "category": "provider"
+    }
+  ]
+}
