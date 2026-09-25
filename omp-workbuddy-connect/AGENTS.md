@@ -135,19 +135,21 @@ git archive --format=zip -o ../omp-workbuddy-connect-portable.zip --prefix=omp-w
 **方式 A（推荐，需 `gh` CLI）**：
 
 ```bash
-gh release create omp-workbuddy-connect-v0.1.4 ../omp-workbuddy-connect-portable.zip \
+gh release create omp-workbuddy-connect-v0.1.4 --verify-tag ../omp-workbuddy-connect-portable.zip \
   --title "omp-workbuddy-connect v0.1.4 — <标题>" \
   --notes "<变更说明>"
 ```
 
+> `--verify-tag` 必须加：tag 必须在本地**已推送**（第 5 步），否则 `gh release create` 会在**默认分支 HEAD** 上新建同名 tag，Release 与附件就挂到了错误的 commit 上。
+
 **方式 B（无 `gh`，用 `GH_TOKEN` + curl）**：
 
 ```bash
-# 创建 release（拿到 id）
+# 创建 release（拿到 id）；tag 必须已推送，否则会被创建在默认分支 HEAD 上
 RID=$(curl -s -X POST \
   -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
-  https://api.github.com/repos/Anymore0010/omp-workbuddy-connect/releases \
-  -d '{"tag_name":"v0.1.2","name":"v0.1.2 — <标题>","body":"<变更说明>"}' \
+  https://api.github.com/repos/Anymore0010/omp-plugins/releases \
+  -d '{"tag_name":"omp-workbuddy-connect-v0.1.4","name":"omp-workbuddy-connect v0.1.4 — <标题>","body":"<变更说明>"}' \
   | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>console.log(JSON.parse(s).id))")
 
 # 上传 zip 附件
@@ -155,7 +157,7 @@ curl -s -X POST \
   -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
   -H "Content-Type: application/zip" \
   --data-binary @../omp-workbuddy-connect-portable.zip \
-  "https://uploads.github.com/repos/Anymore0010/omp-workbuddy-connect/releases/$RID/assets?name=omp-workbuddy-connect-portable.zip"
+  "https://uploads.github.com/repos/Anymore0010/omp-plugins/releases/$RID/assets?name=omp-workbuddy-connect-portable.zip"
 ```
 
 **方式 C（无凭据）**：在 GitHub 网页 Releases 页手动 Draft/发布 Release，并拖入 zip。
@@ -168,7 +170,7 @@ git status -sb                     # 应为 ## main...origin/main（无 ahead/be
 
 # 确认 release 有附件（方式 B 时）
 curl -s -H "Authorization: Bearer $GH_TOKEN" \
-  https://api.github.com/repos/Anymore0010/omp-workbuddy-connect/releases/tags/v0.1.2 \
+  https://api.github.com/repos/Anymore0010/omp-plugins/releases/tags/omp-workbuddy-connect-v0.1.4 \
   | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{const r=JSON.parse(s);console.log(r.name);r.assets.forEach(a=>console.log(' asset:',a.name,a.size))})"
 ```
 

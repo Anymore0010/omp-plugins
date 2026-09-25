@@ -118,10 +118,12 @@ git archive --format=zip -o ../$P-portable.zip --prefix=$P/ HEAD:$P
 ### 7. 创建 Release 并上传附件
 
 ```bash
-gh release create $P-v0.1.4 ../$P-portable.zip \
+gh release create $P-v0.1.4 --verify-tag ../$P-portable.zip \
   --title "$P v0.1.4 — <标题>" \
   --notes "<变更说明>"
 ```
+
+> `--verify-tag` 必须加：tag 必须**已在第 5 步推送**；否则 `gh release create` 会在**默认分支 HEAD** 上新建同名 tag，Release 与附件就挂到了错误的 commit 与错误的文件树上。
 
 **方式 B（无 `gh`，用 `GH_TOKEN` + curl）**：把 `repos/Anymore0010/omp-plugins/releases` 作为端点，`tag_name` 用 `$P-v0.1.4`，附件名用 `$P-portable.zip`。
 
