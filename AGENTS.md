@@ -50,6 +50,96 @@ git log --format='author=%an <%ae> | committer=%cn <%ce>' -1
 
 > 背景：本仓库的前身仓库曾因某台机器的全局 git 身份配置不当，把非预期邮箱写入公开历史，后经历史改写 + force-push 修复。**设置仓库级身份是防止复发的唯一手段**——不要依赖机器的全局配置。
 
+## 两台机器（公司 / 个人）的安装、开发与发布流程
+
+三台插件在机器上有**两种互斥的装载方式**。每个插件**同一时间只能选一种**，不要并存。
+
+### ⚠️ 为什么不能并存（实测，非推测）
+
+omp 对扩展根做去重时比较的是**字面路径**（`discovery/omp-extension-roots.ts` 的 `seen.has(candidate.path)`）：
+
+```
+候选根顺序：显式(CLI/overlay) → 配置(config.yml) → 已安装(marketplace)
+```
+
+路径不同就都会加载，后果：
+
+- **provider 类插件（workbuddy / mimo）双加载**：`src/index.ts` 每次装载都 `shim.listen()`，于是**起两个 loopback shim** 并重复 `registerProvider`。
+- **命令注册是"后者覆盖"**：`getRegisteredCommands` 按同一顺序填 name→command 的 Map，**marketplace 副本最终持有命令**，而 config.yml 副本的 factory 仍然运行（副作用照做）。
+- **本地改动被静默遮蔽**：改仓库源码不生效（命令实际来自 marketplace 缓存副本），但它的副作用仍在跑——最难查的一类问题。
+
+所以下面两种模式**必须整机二选一**；切换时先卸掉另一种。
+
+### 模式 A：日常使用（推荐，两台机器一致）
+
+仓库只是**发布源**，机器上装的是发布物。跨机零差异。
+
+```bash
+omp plugin marketplace add Anymore0010/omp-plugins
+omp plugin install omp-workbuddy-connect@omp-plugins
+omp plugin install omp-mimo-connect@omp-plugins
+omp plugin install omp-fast-update@omp-plugins
+
+omp plugin list        # 三个都应出现
+omp plugin upgrade     # 升级全部（catalog version 变化才会触发）
+```
+
+前提：`~/.omp/agent/config.yml` 里**不能**再有这些插件的 `extensions:` 路径行。
+
+`omp <子命令>` **无法由插件扩展**（CLI 命令表在 `cli-commands.ts` 硬编码），所以 `omp-fast-update` 这个终端命令需要单独装一次 shim：
+
+```bash
+bun <插件安装目录>/src/main.ts --install-cli   # 或会话内 /omp-update-install-cli
+omp-fast-update --check                        # 之后终端直接可用
+```
+
+shim 在**运行时解析已安装的最新版本**，`omp plugin upgrade` 之后无需重装；`--status-cli` 看解析结果，`--uninstall-cli` 删除。
+
+### 模式 B：开发（只在那台要改代码的机器上，临时切换）
+
+先解除 marketplace 副本的遮蔽，再挂本地路径，改完发布后回到模式 A。
+
+```bash
+# 1. 卸掉要开发的插件（否则本地改动会被缓存副本遮蔽）
+omp plugin uninstall omp-workbuddy-connect@omp-plugins
+
+# 2. 在 ~/.omp/agent/config.yml 顶部加本地路径（改完即生效，重启 omp）
+extensions:
+  - D:/Projects/omp-plugins/omp-workbuddy-connect
+
+# 3. 改代码 → 本地验证 → 提交/发版（见下节）
+
+# 4. 回到模式 A
+omp plugin install omp-workbuddy-connect@omp-plugins
+# 并从 config.yml 删掉那一行
+```
+
+> **为什么不用 `omp plugin install <本地路径>`**：Windows 上它走 symlink，未开开发者模式/非管理员时直接 `EPERM: symlink`（实测）。这正是历史上改用 `config.yml` 路径挂载的原因，现在依然成立——所以开发模式只有 config.yml 这一条路。
+
+> **`omp plugin list` 不认识 config.yml 路径**：它只列 npm 与 marketplace 两种登记来源（`cli/plugin-cli.ts`）。走模式 B 时该插件不显示属于正常，不代表没加载。
+
+### 发布（两台机器都适用，任一机器都能做）
+
+与「版本更新流程」一致，核心是**版本号、tag、Release、附件对应同一个 commit**，tag 带插件名前缀。发布后另一台机器：
+
+```bash
+git pull --ff-only origin main
+omp plugin marketplace update omp-plugins   # 刷新 24h 缓存的 catalog
+omp plugin upgrade
+```
+
+> **两台机器都可能发版**，所以发版前先 `git pull --ff-only origin main`；若本地有他人推送的同插件改动，先合并再升版本，避免两个版本号撞在同一个 tag 上。
+
+### 自检清单（换机或排查时跑一遍）
+
+```bash
+git config --local user.name && git config --local user.email   # 必须是 YuCN / yuchen0010@qq.com
+omp plugin list                                                 # 模式 A：三个都在
+grep -A3 '^extensions:' ~/.omp/agent/config.yml                 # 模式 A：不应有这些插件路径
+omp -p --no-session "只回答OK"                                   # 无 conflict/重复注册告警
+omp models | grep -E '^(workbuddy|mimo)'                        # provider 模式 A：各出现一次
+```
+
 ## 版本更新流程（子目录内操作）
 
 > ⚠️ 核心原则：**版本号、tag、Release、附件四者必须对应同一个 commit**。tag 一旦推送不要移动；出错就发新补丁版本。

@@ -102,13 +102,15 @@ function compareVersionStrings(left: string, right: string): number {
  * file the user can read and delete.
  */
 function resolverScript(): string {
-	return `import { existsSync, readdirSync } from "node:fs";
+	return `import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
-const CACHE = join(homedir(), ".omp", "plugins", "cache", "plugins");
+import { join, isAbsolute, resolve } from "node:path";
+const HOME = homedir();
+const CACHE = join(HOME, ".omp", "plugins", "cache", "plugins");
 const PREFIX = "${CACHE_PLUGIN_PREFIX}";
 const REL = ${JSON.stringify(CLI_ENTRY_RELATIVE)};
 const BAKED = ${JSON.stringify(CLI_ENTRY)};
+const NAME = "${SHIM_NAME}";
 const cmp = (a, b) => {
   const p = v => v.split(".").map(n => parseInt(n, 10) || 0);
   const x = p(a), y = p(b);
@@ -118,13 +120,44 @@ const cmp = (a, b) => {
   }
   return 0;
 };
+// A config.yml \`extensions:\` entry that points at this plugin wins over any
+// marketplace copy: that is the documented development mode (edit the repo,
+// restart omp), and the marketplace cache would otherwise silently shadow the
+// user's own checkout. Candidate configs are project then user, matching the
+// host's own precedence (project config shadows user config).
+const configCandidates = [
+  join(process.cwd(), ".omp", "config.yml"),
+  join(HOME, ".omp", "agent", "config.yml"),
+  join(HOME, ".omp", "config.yml"),
+];
+const configuredEntries = [];
+for (const cfg of configCandidates) {
+  if (!existsSync(cfg)) continue;
+  let lines;
+  try { lines = readFileSync(cfg, "utf8").split(/\\r?\\n/); } catch { continue; }
+  let inBlock = false;
+  for (const line of lines) {
+    if (/^extensions:\\s*$/.test(line)) { inBlock = true; continue; }
+    if (!inBlock) continue;
+    const item = /^\\s+-\\s+(.*\\S)\\s*$/.exec(line);
+    if (!item) { if (/^\\S/.test(line)) inBlock = false; continue; }
+    configuredEntries.push(item[1].replace(/^["']|["']$/g, ""));
+  }
+  if (configuredEntries.length > 0) break;
+}
+const fromConfig = configuredEntries
+  .map(raw => (raw.startsWith("~") ? join(HOME, raw.slice(1)) : raw))
+  .map(raw => (isAbsolute(raw) ? raw : resolve(raw)))
+  .map(dir => join(dir, REL))
+  .find(entry => existsSync(entry));
+
 // A baked path outside the marketplace cache is a source checkout the user
-// pointed at deliberately; it never goes stale, so prefer it. A baked path
-// INSIDE the cache belongs to one version directory that the next upgrade
-// abandons, so resolve the newest installed version instead.
+// pointed at deliberately; a baked path inside the cache belongs to one
+// version directory that the next upgrade abandons.
 const bakedInCache = BAKED.startsWith(CACHE);
-if (!bakedInCache && existsSync(BAKED)) {
-  const child = Bun.spawn(["bun", BAKED, ...process.argv.slice(2)], { stdio: ["inherit", "inherit", "inherit"] });
+const direct = fromConfig ?? (!bakedInCache && existsSync(BAKED) ? BAKED : undefined);
+if (direct) {
+  const child = Bun.spawn(["bun", direct, ...process.argv.slice(2)], { stdio: ["inherit", "inherit", "inherit"] });
   process.exit(await child.exited);
 }
 const candidates = [];
@@ -138,12 +171,65 @@ try {
 candidates.sort((a, b) => cmp(b.v, a.v));
 const entry = candidates[0]?.entry ?? (existsSync(BAKED) ? BAKED : undefined);
 if (entry === undefined) {
-  console.error("${SHIM_NAME}: 找不到插件安装位置（请先 omp plugin install omp-fast-update@omp-plugins，或重跑 --install-cli）");
+  console.error(NAME + ": 找不到插件安装位置（请先 omp plugin install omp-fast-update@omp-plugins，或重跑 --install-cli）");
   process.exit(1);
 }
 const child = Bun.spawn(["bun", entry, ...process.argv.slice(2)], { stdio: ["inherit", "inherit", "inherit"] });
 process.exit(await child.exited);
 `
+}
+
+/**
+ * Config-declared source checkout for this plugin, if the user mounted one.
+ *
+ * Mirrors the resolver embedded in the generated shim: project `.omp/config.yml`
+ * first, then `~/.omp/agent/config.yml`, taking the first file that lists any
+ * `extensions:` entry resolving to this plugin's CLI entry.
+ */
+export function configuredSourceEntry(): string | undefined {
+	const configs = [
+		path.join(process.cwd(), ".omp", "config.yml"),
+		path.join(os.homedir(), ".omp", "agent", "config.yml"),
+		path.join(os.homedir(), ".omp", "config.yml"),
+	]
+	for (const config of configs) {
+		if (!fs.existsSync(config)) continue
+		const entries = readExtensionEntries(config)
+		const found = entries
+			.map(raw => (raw.startsWith("~") ? path.join(os.homedir(), raw.slice(1)) : raw))
+			.map(raw => (path.isAbsolute(raw) ? raw : path.resolve(raw)))
+			.map(dir => path.join(dir, CLI_ENTRY_RELATIVE))
+			.find(entry => fs.existsSync(entry))
+		if (found !== undefined) return found
+	}
+	return undefined
+}
+
+/** Parse the `extensions:` block of a YAML config into raw entry strings. */
+function readExtensionEntries(configPath: string): string[] {
+	let lines: string[]
+	try {
+		lines = fs.readFileSync(configPath, "utf8").split(/\r?\n/u)
+	} catch {
+		return []
+	}
+	const entries: string[] = []
+	let inBlock = false
+	for (const line of lines) {
+		if (/^extensions:\s*$/u.test(line)) {
+			inBlock = true
+			continue
+		}
+		if (!inBlock) continue
+		const item = /^\s+-\s+(.*\S)\s*$/u.exec(line)
+		if (item === null) {
+			// A non-indented line ends the block.
+			if (/^\S/u.test(line)) inBlock = false
+			continue
+		}
+		entries.push((item[1] as string).replace(/^["']|["']$/gu, ""))
+	}
+	return entries
 }
 
 function shimBody(dir: string): string[] {

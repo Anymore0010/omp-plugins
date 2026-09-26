@@ -27,7 +27,7 @@
     {
       "name": "omp-fast-update",
       "source": "./omp-fast-update",
-      "version": "0.1.4",
+      "version": "0.1.5",
       "description": "并发分片自更新：/omp-update 多连接下载 GitHub release 二进制，绕过 omp update 单连接限速。",
       "license": "MIT",
       "category": "utility"
