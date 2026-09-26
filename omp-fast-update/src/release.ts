@@ -92,7 +92,11 @@ function isMuslHost(): boolean {
 }
 
 /** Resolve the asset URL, size, and digest for a release from GitHub metadata. */
-export async function resolveReleaseAsset(version: string, binaryName: string): Promise<RemoteAsset> {
+export async function resolveReleaseAsset(
+	version: string,
+	binaryName: string,
+	allowPrerelease = false,
+): Promise<RemoteAsset> {
 	const tag = `v${version}`
 	const headers: Record<string, string> = {
 		Accept: "application/vnd.github+json",
@@ -113,7 +117,11 @@ export async function resolveReleaseAsset(version: string, binaryName: string): 
 	if (release === undefined) throw new Error(`GitHub release ${tag} 元数据格式无效`)
 	if (release["tag_name"] !== tag) throw new Error(`GitHub release tag 不匹配：期望 ${tag}`)
 	if (release["draft"] !== false) throw new Error(`GitHub release ${tag} 仍是草稿`)
-	if (release["prerelease"] !== false) throw new Error(`GitHub release ${tag} 是预发布版本`)
+	// Canary builds are published as prereleases, so only the canary channel may
+	// install them — the exact-tag check above still pins the download.
+	if (release["prerelease"] !== false && !allowPrerelease) {
+		throw new Error(`GitHub release ${tag} 是预发布版本（canary 渠道请用 --canary）`)
+	}
 
 	const assets = release["assets"]
 	if (!Array.isArray(assets)) throw new Error(`GitHub release ${tag} 没有资产列表`)

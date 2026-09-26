@@ -213,7 +213,10 @@ export async function installStagedBinary(options: InstallOptions): Promise<Inst
 		// Swap verified. On Windows the backup is still the running process image
 		// and cannot be unlinked until this process exits; deletion is best effort.
 		if (backupReady) await fs.promises.rm(backupPath, { force: true }).catch(() => undefined)
-		void sweepStaleArtifacts(options.targetPath).catch(() => undefined)
+		// Awaited, not fire-and-forget: a sweep outliving this lock could unlink
+		// the next process's backup mid-verify and leave it with nothing to roll
+		// back to. Holding the lock makes unconditional backup reaping safe.
+		await sweepStaleArtifacts(options.targetPath, { inLock: true })
 		return { path: options.targetPath, previousVersion }
 	})
 }
@@ -221,11 +224,16 @@ export async function installStagedBinary(options: InstallOptions): Promise<Inst
 /**
  * Remove `<target>.<stamp>.(new|bak)` leftovers from earlier runs.
  *
- * `.new` files are only reclaimed once older than the download window, so a
- * concurrently downloading update never loses its temp file. Backup deletion is
- * always best effort: Windows refuses to unlink the running image.
+ * Both suffixes are age-gated by default: a `.new` belongs to a download that
+ * may still be running, and a `.bak` may be the backup another process's
+ * rename→verify→rollback window still needs. Callers that already hold the
+ * per-target lock pass `{ inLock: true }` to reap backups unconditionally —
+ * nothing else can be mid-swap on that target then.
+ *
+ * Deletion is always best effort: Windows refuses to unlink the running image,
+ * and a locked file only becomes removable after its owning process exits.
  */
-export async function sweepStaleArtifacts(targetPath: string): Promise<void> {
+export async function sweepStaleArtifacts(targetPath: string, options: { inLock?: boolean } = {}): Promise<void> {
 	const dir = path.dirname(targetPath)
 	const base = path.basename(targetPath)
 	let entries: string[]
@@ -242,7 +250,8 @@ export async function sweepStaleArtifacts(targetPath: string): Promise<void> {
 		const middle = entry.slice(base.length + 1, entry.length - suffix.length)
 		if (middle.length === 0 || !/^\d+(\.\d+)*$/u.test(middle)) continue
 		const full = path.join(dir, entry)
-		if (suffix === ".new") {
+		const reapUnconditional = suffix === ".new" ? false : options.inLock === true
+		if (!reapUnconditional) {
 			const age = await fs.promises
 				.stat(full)
 				.then(stat => now - stat.mtimeMs)

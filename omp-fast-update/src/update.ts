@@ -38,10 +38,9 @@ export interface UpdateContext {
 	launcherPath?: string
 }
 
-const DEFAULT_CONNECTIONS = 8
+/** Default concurrency; the CLI restricts requested values to its tier list. */
+const DEFAULT_CONNECTIONS = 64
 const DEFAULT_CHUNK_BYTES = 8 * 1024 * 1024
-const MIN_CONNECTIONS = 1
-const MAX_CONNECTIONS = 32
 
 function formatRate(bytesPerSecond: number): string {
 	const mbps = bytesPerSecond / 1024 / 1024
@@ -113,16 +112,16 @@ export async function runFastUpdate(options: FastUpdateOptions, context: UpdateC
 	}
 
 	const binaryName = binaryNameForHost()
-	const asset = await resolveReleaseAsset(version, binaryName)
+	// Canary releases are published as GitHub prereleases, so the channel has to
+	// authorize them here or `--canary` could never install anything.
+	const asset = await resolveReleaseAsset(version, binaryName, channel === "canary")
 	// Leftovers from earlier runs whose owning process has exited (a backup that
 	// was still the running image back then, or a temp from a killed download).
 	await sweepStaleArtifacts(ownership.path).catch(() => undefined)
 	io.progress(`下载 ${binaryName}（${formatMegabytes(asset.size)}）…`)
 
-	const connections = Math.max(
-		MIN_CONNECTIONS,
-		Math.min(options.connections ?? DEFAULT_CONNECTIONS, MAX_CONNECTIONS),
-	)
+	// The CLI validates the tier; the chunk count caps it further for small assets.
+	const connections = options.connections ?? DEFAULT_CONNECTIONS
 	const stagedPath = stagingPathFor(ownership.path)
 	const startedAt = Date.now()
 	let downloaded: DownloadResult

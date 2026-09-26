@@ -55,6 +55,30 @@ export interface DownloadResult {
 const RANGE_PROBE_BYTES = 1024
 const DEFAULT_ATTEMPTS = 6
 const RETRY_BASE_MS = 400
+/**
+ * Per-request deadline. Sized far above one chunk's transfer time (an 8 MiB
+ * range even at 50 KB/s takes under 3 minutes) so it fires on a genuinely
+ * stalled connection, not on a slow-but-progressing one. Without it a
+ * half-open connection through a flaky proxy hangs the command forever.
+ */
+const CHUNK_TIMEOUT_MS = 5 * 60_000
+const PROBE_TIMEOUT_MS = 30_000
+/**
+ * Overall deadline for one asset, mirroring the stock updater's 15-minute
+ * download timeout. Generous enough for a 250 MB asset at ~300 KB/s.
+ */
+const OVERALL_TIMEOUT_MS = 20 * 60_000
+
+/** Combine the caller's signal (cancel) with a deadline into one signal. */
+function withDeadline(signal: AbortSignal | undefined, timeoutMs: number): AbortSignal {
+	const timeout = AbortSignal.timeout(timeoutMs)
+	return signal === undefined ? timeout : AbortSignal.any([signal, timeout])
+}
+
+/** True when the failure was a deadline rather than a caller cancellation. */
+function isDeadlineError(error: unknown, signal: AbortSignal | undefined): boolean {
+	return !(signal?.aborted ?? false) && (error as Error | undefined)?.name === "TimeoutError"
+}
 
 function sleep(ms: number, signal?: AbortSignal): Promise<void> {
 	if (signal?.aborted) return Promise.reject(new Error("已取消"))
@@ -84,7 +108,7 @@ export async function probeAsset(
 	const response = await fetch(url, {
 		headers: { Range: `bytes=0-${RANGE_PROBE_BYTES - 1}` },
 		redirect: "follow",
-		signal,
+		signal: withDeadline(signal, PROBE_TIMEOUT_MS),
 	})
 	// Drain the probe body so the connection can be reused.
 	await response.arrayBuffer().catch(() => undefined)
@@ -126,7 +150,7 @@ async function fetchChunk(
 			const response = await fetch(url, {
 				headers: { Range: `bytes=${start}-${end}` },
 				redirect: "follow",
-				signal,
+				signal: withDeadline(signal, CHUNK_TIMEOUT_MS),
 			})
 			if (response.status !== 206) {
 				throw new Error(`分片请求返回 HTTP ${response.status}（期望 206）`)
@@ -146,7 +170,7 @@ async function fetchChunk(
 			return
 		} catch (error) {
 			if (signal?.aborted) throw new Error("已取消")
-			lastError = describeError(error)
+			lastError = isDeadlineError(error, signal) ? `请求超时（>${CHUNK_TIMEOUT_MS / 60_000} 分钟）` : describeError(error)
 			if (attempt + 1 < attempts) await sleep(RETRY_BASE_MS * 2 ** attempt, signal)
 		}
 	}
@@ -213,13 +237,40 @@ export async function downloadRanged(options: DownloadOptions): Promise<Download
 	const startedAt = Date.now()
 	await fs.promises.rm(targetPath, { force: true })
 
+	// One deadline for the whole asset, on top of the per-request one, so a
+	// connection that keeps trickling forever cannot extend the command
+	// indefinitely. Cancellation still propagates from the caller's signal.
+	const deadline = withDeadline(options.signal, OVERALL_TIMEOUT_MS)
+	const scoped: DownloadOptions = { ...options, signal: deadline }
+	try {
+		return await downloadScoped(scoped, startedAt)
+	} catch (error) {
+		if (isDeadlineError(error, options.signal)) {
+			throw new Error(`下载超时（>${OVERALL_TIMEOUT_MS / 60_000} 分钟），已取消`)
+		}
+		throw error
+	}
+}
+
+async function downloadScoped(options: DownloadOptions, startedAt: number): Promise<DownloadResult> {
+	const { asset, targetPath } = options
+
 	const probe = await probeAsset(asset.url, options.signal)
 	if (!probe.ranges) return downloadSingleStream(options, startedAt)
 	if (probe.size !== undefined && probe.size !== asset.size) {
 		throw new Error(`服务器报告的资产大小 ${probe.size} 与发布元数据 ${asset.size} 不一致`)
 	}
 
-	const chunkBytes = Math.max(options.chunkBytes, 1)
+	// An explicit --chunk is a ceiling, not a target: splitting a 225 MB asset
+	// into 8 MB chunks yields only 29 pieces, so asking for 64 connections would
+	// silently run 29. Shrink the chunk as needed to make the requested
+	// connection count reachable, floored at 1 MB so a small asset does not turn
+	// into thousands of requests (the CLI enforces the same 1 MB minimum).
+	const requestedChunk = Math.max(options.chunkBytes, 1024 * 1024)
+	const chunkBytes = Math.max(
+		1024 * 1024,
+		Math.min(requestedChunk, Math.ceil(asset.size / options.connections)),
+	)
 	const chunkCount = Math.ceil(asset.size / chunkBytes)
 	const connections = Math.max(1, Math.min(options.connections, chunkCount))
 	const handle = await fs.promises.open(targetPath, "w+")

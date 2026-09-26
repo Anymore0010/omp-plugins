@@ -27,8 +27,9 @@ export type ParsedArgs =
 	| { kind: "usage" }
 	| { kind: "error"; message: string }
 
-const MIN_CONNECTIONS = 1
-const MAX_CONNECTIONS = 32
+const MIN_CONNECTIONS = 2
+/** Supported concurrency tiers. Doubling keeps the scaling curve predictable. */
+const CONNECTION_TIERS = [2, 4, 8, 16, 32, 64] as const
 const MIN_CHUNK_MB = 1
 const MAX_CHUNK_MB = 128
 
@@ -87,8 +88,14 @@ export function parseArgs(raw: string): ParsedArgs {
 			case "--connections": {
 				const value = takeValue()
 				if (value === undefined) return { kind: "error", message: `${name} 需要一个参数` }
-				const parsed = parsePositiveInt(value, name, MIN_CONNECTIONS, MAX_CONNECTIONS)
+				const parsed = parsePositiveInt(value, name, MIN_CONNECTIONS, CONNECTION_TIERS.at(-1) as number)
 				if (typeof parsed === "string") return { kind: "error", message: parsed }
+				if (!CONNECTION_TIERS.includes(parsed as (typeof CONNECTION_TIERS)[number])) {
+					return {
+						kind: "error",
+						message: `${name} 只支持 ${CONNECTION_TIERS.join("/")}，收到 ${parsed}`,
+					}
+				}
 				options.connections = parsed
 				break
 			}
@@ -133,7 +140,7 @@ export const USAGE = `omp-fast-update — 并发分片安装 omp 更新
       --canary           使用 canary 渠道
       --stable           使用 stable 渠道
   -v, --version <X.Y.Z>  安装指定版本（等价于 --force）
-  -j, --connections <N>  并发分片连接数（1-32，默认 8）
+  -j, --connections <N>  并发分片连接数，仅支持 2/4/8/16/32/64（默认 64）
       --chunk <MB>       每个分片大小，单位 MB（1-128，默认 8）
 
 仅适用于独立二进制安装（~/.local/bin 或 AppData 下的 omp 可执行文件）。
