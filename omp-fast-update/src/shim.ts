@@ -6,23 +6,33 @@
  * directory as the `omp` executable — that directory is already on `PATH` and
  * writable by the user — so a terminal invocation behaves like `omp update`.
  *
- * The shim bakes in the absolute path of {@link CLI_ENTRY}, so it must be
- * reinstalled after the plugin moves (a marketplace upgrade installs into a new
- * versioned cache directory). `status()` reports whether the recorded path
- * still matches, and every command prints that state rather than silently
- * running a stale target.
+ * The shim does NOT bake in a path that a marketplace upgrade would invalidate:
+ * a plugin upgrade installs into a new versioned cache directory
+ * (`.../cache/plugins/omp-plugins___omp-fast-update___<version>`), so a baked
+ * path would break on the upgrade the user is most likely to run next. Instead
+ * the generated launchers resolve the newest installed copy at run time, then
+ * fall back to the baking-in path, then fail with an actionable message.
+ *
+ * The plugin is also discoverable via `~/.omp/agent/config.yml` (a source
+ * checkout), so both layouts are searched.
  */
 
 import * as fs from "node:fs"
+import * as os from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 import { resolveLauncherPath } from "./replace"
 
-/** Absolute path of the CLI entry this shim should invoke. */
-const CLI_ENTRY = fileURLToPath(new URL("./main.ts", import.meta.url))
+/** Absolute path of the CLI entry of the currently running copy. */
+export const CLI_ENTRY = fileURLToPath(new URL("./main.ts", import.meta.url))
 const SHIM_NAME = "omp-fast-update"
 /** Marks the generated file so an unrelated user file is never overwritten. */
 const SHIM_MARKER = `${SHIM_NAME} shim`
+/** Marketplace cache holding one directory per installed plugin version. */
+const CACHE_PLUGIN_GLOB_DIR = path.join(os.homedir(), ".omp", "plugins", "cache", "plugins")
+const CACHE_PLUGIN_PREFIX = "omp-plugins___omp-fast-update___"
+/** Relative path of the CLI entry inside any install layout. */
+const CLI_ENTRY_RELATIVE = path.join("src", "main.ts")
 
 /** Result of an install/uninstall/status call, ready to print. */
 export interface ShimResult {
@@ -32,6 +42,7 @@ export interface ShimResult {
 	paths: string[]
 }
 
+/** Directory of the `omp` launcher — already on PATH and user-writable. */
 function shimDir(): string | undefined {
 	const launcher = resolveLauncherPath()
 	return launcher === undefined ? undefined : path.dirname(launcher)
@@ -43,36 +54,136 @@ function shimPaths(dir: string): string[] {
 		: [path.join(dir, SHIM_NAME)]
 }
 
-function shimBody(): string[] {
-	if (process.platform === "win32") {
-		return [
-			`@echo off\r\nrem ${SHIM_NAME} shim — generated, safe to delete\r\nbun "${CLI_ENTRY}" %*\r\n`,
-			`# ${SHIM_NAME} shim — generated, safe to delete\n& bun "${CLI_ENTRY}" @args\nexit $LASTEXITCODE\n`,
-		]
+/**
+ * Newest installed copy of this plugin's CLI entry.
+ *
+ * Versions are compared numerically segment by segment so `0.1.10` outranks
+ * `0.1.9` (a lexicographic sort would pick the wrong one).
+ */
+export function newestInstalledEntry(): string | undefined {
+	let entries: string[]
+	try {
+		entries = fs.readdirSync(CACHE_PLUGIN_GLOB_DIR)
+	} catch {
+		return undefined
 	}
-	return [`#!/bin/sh\n# ${SHIM_NAME} shim — generated, safe to delete\nexec bun "${CLI_ENTRY}" "$@"\n`]
+	const candidates = entries
+		.filter(name => name.startsWith(CACHE_PLUGIN_PREFIX))
+		.map(name => ({
+			name,
+			version: name.slice(CACHE_PLUGIN_PREFIX.length).split("-")[0] ?? "",
+			entry: path.join(CACHE_PLUGIN_GLOB_DIR, name, CLI_ENTRY_RELATIVE),
+		}))
+		.filter(candidate => fs.existsSync(candidate.entry))
+		.sort((left, right) => compareVersionStrings(right.version, left.version))
+	return candidates[0]?.entry
 }
 
-/** Report where the shim is and whether it still points at this install. */
+function compareVersionStrings(left: string, right: string): number {
+	const parse = (value: string): number[] =>
+		value
+			.split(".")
+			.map(part => Number.parseInt(part, 10))
+			.map(number => (Number.isNaN(number) ? 0 : number))
+	const a = parse(left)
+	const b = parse(right)
+	for (let index = 0; index < Math.max(a.length, b.length); index++) {
+		const difference = (a[index] ?? 0) - (b[index] ?? 0)
+		if (difference !== 0) return difference
+	}
+	return 0
+}
+
+/**
+ * JavaScript launcher shared by the generated shims.
+ *
+ * Resolving at run time is what makes the shim survive `omp plugin upgrade`.
+ * It is embedded rather than imported so the shim stays a single self-contained
+ * file the user can read and delete.
+ */
+function resolverScript(): string {
+	return `import { existsSync, readdirSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
+const CACHE = join(homedir(), ".omp", "plugins", "cache", "plugins");
+const PREFIX = "${CACHE_PLUGIN_PREFIX}";
+const REL = ${JSON.stringify(CLI_ENTRY_RELATIVE)};
+const BAKED = ${JSON.stringify(CLI_ENTRY)};
+const cmp = (a, b) => {
+  const p = v => v.split(".").map(n => parseInt(n, 10) || 0);
+  const x = p(a), y = p(b);
+  for (let i = 0; i < Math.max(x.length, y.length); i++) {
+    const d = (x[i] || 0) - (y[i] || 0);
+    if (d) return d;
+  }
+  return 0;
+};
+// A baked path outside the marketplace cache is a source checkout the user
+// pointed at deliberately; it never goes stale, so prefer it. A baked path
+// INSIDE the cache belongs to one version directory that the next upgrade
+// abandons, so resolve the newest installed version instead.
+const bakedInCache = BAKED.startsWith(CACHE);
+if (!bakedInCache && existsSync(BAKED)) {
+  const child = Bun.spawn(["bun", BAKED, ...process.argv.slice(2)], { stdio: ["inherit", "inherit", "inherit"] });
+  process.exit(await child.exited);
+}
+const candidates = [];
+try {
+  for (const name of readdirSync(CACHE)) {
+    if (!name.startsWith(PREFIX)) continue;
+    const entry = join(CACHE, name, REL);
+    if (existsSync(entry)) candidates.push({ v: name.slice(PREFIX.length).split("-")[0], entry });
+  }
+} catch {}
+candidates.sort((a, b) => cmp(b.v, a.v));
+const entry = candidates[0]?.entry ?? (existsSync(BAKED) ? BAKED : undefined);
+if (entry === undefined) {
+  console.error("${SHIM_NAME}: 找不到插件安装位置（请先 omp plugin install omp-fast-update@omp-plugins，或重跑 --install-cli）");
+  process.exit(1);
+}
+const child = Bun.spawn(["bun", entry, ...process.argv.slice(2)], { stdio: ["inherit", "inherit", "inherit"] });
+process.exit(await child.exited);
+`
+}
+
+function shimBody(dir: string): string[] {
+	const scriptPath = path.join(dir, `${SHIM_NAME}-run.mjs`)
+	const invoke = `bun "${scriptPath}"`
+	if (process.platform === "win32") {
+		return [
+			`@echo off\r\nrem ${SHIM_NAME} shim — generated, safe to delete\r\n${invoke} %*\r\n`,
+			`# ${SHIM_NAME} shim — generated, safe to delete\n& ${invoke} @args\nexit $LASTEXITCODE\n`,
+		]
+	}
+	return [`#!/bin/sh\n# ${SHIM_NAME} shim — generated, safe to delete\nexec ${invoke} "$@"\n`]
+}
+
+/** Files the shim comprises: the run-time resolver plus the entry launchers. */
+function allShimFiles(dir: string): string[] {
+	return [path.join(dir, `${SHIM_NAME}-run.mjs`), ...shimPaths(dir)]
+}
+
+/** Report where the shim is and whether it resolves to a real install. */
 export async function shimStatus(): Promise<ShimResult> {
 	const dir = shimDir()
-	if (dir === undefined) {
-		return { ok: false, message: "找不到 omp 启动器路径，无法定位 PATH 目录。", paths: [] }
-	}
-	const paths = shimPaths(dir)
-	const existing = paths.filter(p => fs.existsSync(p))
+	if (dir === undefined) return { ok: false, message: "找不到 omp 启动器路径，无法定位 PATH 目录。", paths: [] }
+	const existing = allShimFiles(dir).filter(file => fs.existsSync(file))
 	if (existing.length === 0) {
-		return { ok: false, message: `未安装（可运行 omp-fast-update --install-cli 安装到 ${dir}）`, paths }
+		return {
+			ok: false,
+			message: `未安装（可运行 omp-fast-update --install-cli 安装到 ${dir}）`,
+			paths: allShimFiles(dir),
+		}
 	}
-	const stale = existing.some(p => {
-		const body = fs.readFileSync(p, "utf8")
-		return !body.includes(SHIM_MARKER) || !body.includes(CLI_ENTRY)
-	})
+	// The shim resolves at run time, so a plugin upgrade does not invalidate it;
+	// it is only stale if no installed copy can be found at all.
+	const resolved = newestInstalledEntry()
 	return {
-		ok: !stale,
-		message: stale
-			? `已安装但指向旧路径（插件可能已升级）；重新运行 --install-cli 刷新：${existing.join(", ")}`
-			: `已安装：${existing.join(", ")}`,
+		ok: resolved !== undefined,
+		message:
+			resolved !== undefined
+				? `已安装（解析到 ${resolved}）`
+				: `已安装但找不到任何插件安装副本；先 omp plugin install omp-fast-update@omp-plugins`,
 		paths: existing,
 	}
 }
@@ -88,21 +199,30 @@ export async function installCliShim(): Promise<ShimResult> {
 	if (dir === undefined) {
 		return { ok: false, message: "找不到 omp 启动器路径，请手动把 main.ts 加入 PATH。", paths: [] }
 	}
-	const paths = shimPaths(dir)
-	const bodies = shimBody()
-	for (const existing of paths) {
+	for (const existing of shimPaths(dir)) {
 		if (!fs.existsSync(existing)) continue
 		if (!fs.readFileSync(existing, "utf8").includes(SHIM_MARKER)) {
 			return { ok: false, message: `${existing} 已存在且不是本插件生成的，未覆盖。`, paths: [existing] }
 		}
 	}
 	const written: string[] = []
+	await fs.promises.writeFile(path.join(dir, `${SHIM_NAME}-run.mjs`), resolverScript(), { mode: 0o755 })
+	written.push(path.join(dir, `${SHIM_NAME}-run.mjs`))
+	const bodies = shimBody(dir)
+	const paths = shimPaths(dir)
 	for (let index = 0; index < paths.length; index++) {
 		const target = paths[index] as string
 		await fs.promises.writeFile(target, bodies[index] as string, { mode: 0o755 })
 		written.push(target)
 	}
-	return { ok: true, message: `已安装，新开终端后可直接运行 ${SHIM_NAME}（路径 ${dir} 已在 PATH 上）。`, paths: written }
+	const resolved = newestInstalledEntry()
+	return {
+		ok: true,
+		message: `已安装，新开终端后可直接运行 ${SHIM_NAME}（路径 ${dir} 已在 PATH 上）${
+			resolved === undefined ? "；注意：尚未检测到插件安装副本" : ""
+		}。插件升级后无需重装。`,
+		paths: written,
+	}
 }
 
 /** Remove the generated shims. */
@@ -110,7 +230,7 @@ export async function uninstallCliShim(): Promise<ShimResult> {
 	const dir = shimDir()
 	if (dir === undefined) return { ok: false, message: "找不到 omp 启动器路径。", paths: [] }
 	const removed: string[] = []
-	for (const target of shimPaths(dir)) {
+	for (const target of allShimFiles(dir)) {
 		if (!fs.existsSync(target)) continue
 		if (!fs.readFileSync(target, "utf8").includes(SHIM_MARKER)) continue
 		await fs.promises.rm(target, { force: true })

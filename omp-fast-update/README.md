@@ -66,10 +66,10 @@ shim 写在 `omp` 可执行文件所在目录（该目录已在 PATH 上、且�
 | 命令 | 作用 |
 | --- | --- |
 | `--install-cli` | 生成 `omp-fast-update.cmd` / `.ps1`（Windows）或 `omp-fast-update`（POSIX） |
-| `--status-cli` | 查看状态；**插件升级后路径会变，需重装** |
+| `--status-cli` | 查看状态（显示当前解析到的安装路径） |
 | `--uninstall-cli` | 删除 shim |
 
-shim 只认自己写入的内容（带标记），不会覆盖你同名的既有文件。
+shim 由 `omp-fast-update-run.mjs`（运行时解析）+ `.cmd`/`.ps1` 入口组成，**在运行时挑选已安装的最新版本**，因此 `omp plugin upgrade` 之后无需重装。它只认自己写入的内容（带标记），不会覆盖你同名的既有文件。
 
 并发数**不是任意值**：只接受 `2/4/8/16/32/64` 六档（默认 64），其它值直接报错——避免 `-j 1000` 这类把连接数打满的做法。实际并发受分片总数限制；分片会按并发数自动缩小（下限 1 MB），所以 64 档在 225 MB 的资产上能真正跑满 64 条连接，而不是被 8 MB 分片卡在 29 条。
 
@@ -81,14 +81,18 @@ shim 只认自己写入的内容（带标记），不会覆盖你同名的既有
 4. **校验** —— 全部完成后统一校验 size 与 SHA-256（与 release 元数据比对）；任何不符都删掉暂存文件并报错，**不会**把半成品当成成功。
 5. **安装与回滚** —— 暂存文件与目标同目录（保证 rename 同卷）：把现启动器改名为 `<target>.ompfastupdate.<时间戳>.<pid>.<序号>.bak`，把新文件 rename 就位，再执行 `<target> --version` 校验；不符则**回滚**回旧启动器。交换期间用 `<target>.fast-update.lock` 串行化，避免两个更新同时换。
 
-   所有本插件产生的临时/备份文件都带 **`.ompfastupdate` 标记**，清理只认带标记的文件：`omp update` 自己的备份（`<binary>.<数字>.bak`）是用户的回退点，绝不被本插件删除（反之 omp 的正则也匹配不到本插件的名字）。带标记的 `.new` 超过 15 分钟回收，带标记的 `.bak` 保留 7 天后回收。
+   **清理只碰本插件自己的文件**：所有本插件产生的临时/备份文件都带 `.ompfastupdate` 标记（`<target>.ompfastupdate.<ts>.<pid>.<seq>.{new,bak}`），扫描器**只认这个标记**，其它文件一律不动。
+
+   > ⚠️ 这就是 v0.1.3 修掉的一个真实事故：v0.1.0–0.1.2 沿用 omp 自己的命名（`<binary>.<数字>.<数字>.<数字>.bak`），其清理按该数字形状回收，**删掉了用户由 `omp update` 产生的备份**；omp 的清理也会反过来删本插件的文件。加标记后两个清理器互不可见。
+
+   带标记的 `.new` 超过 15 分钟回收；带标记的 `.bak` 保留 **7 天**后回收（留出人工回滚窗口）。
 
 ## 边界（重要）
 
 - **只处理独立二进制安装**。启动器是符号链接、shell/`cmd`/`ps1` shim、或非 `.exe` 时会被识别为包管理器（bun/npm/brew/mise）安装，命令只报告并指向 `omp update`，不做任何替换。
 - **不做 bun/npm 全局重装**（不解析 `omp.dist`；靠启动器形态判定）。
 - **`--canary` 走 GitHub prerelease**：canary 版本是预发布，只有 `--canary` 渠道放行。
-- **Windows 上旧备份可能删不掉**：正在运行的进程镜像无法 unlink，`<target>.<stamp>.bak` 会留给下次运行回收（与 `omp update` 行为一致）。
+- **Windows 上本插件的旧备份可能删不掉**：正在运行的进程镜像无法 unlink，带标记的 `<target>.ompfastupdate.<stamp>.bak` 只能等持有它的进程退出；`omp update` 自己的备份（无标记）**本插件永不删除**。
 - **需要 Range 支持**：若服务器不返回 206，自动退回单连接下载（仍然做 size/digest 校验），此时不会有加速。
 - **代理**：沿用进程环境（Bun `fetch` 遵循 `HTTPS_PROXY`）。
 - **GitHub API 限流**：取 release 元数据用的是 GitHub API（未认证时可能 403）；设置 `GITHUB_TOKEN` 或 `GH_TOKEN` 即可。
