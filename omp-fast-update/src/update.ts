@@ -17,7 +17,7 @@ import {
 	resolveReleaseAsset,
 	type Channel,
 } from "./release"
-import { classifyTarget, installStagedBinary, resolveLauncherPath, stagingPathFor } from "./replace"
+import { classifyTarget, installStagedBinary, resolveLauncherPath, stagingPathFor, sweepStaleArtifacts } from "./replace"
 import type { FastUpdateOptions } from "./cli"
 
 /** Side effects the flow needs, injected so the command layer owns presentation. */
@@ -114,6 +114,9 @@ export async function runFastUpdate(options: FastUpdateOptions, context: UpdateC
 
 	const binaryName = binaryNameForHost()
 	const asset = await resolveReleaseAsset(version, binaryName)
+	// Leftovers from earlier runs whose owning process has exited (a backup that
+	// was still the running image back then, or a temp from a killed download).
+	await sweepStaleArtifacts(ownership.path).catch(() => undefined)
 	io.progress(`下载 ${binaryName}（${formatMegabytes(asset.size)}）…`)
 
 	const connections = Math.max(
