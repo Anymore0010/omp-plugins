@@ -1,0 +1,96 @@
+# omp-fast-update
+
+给 [omp](https://omp.sh/) 的**并发分片自更新**扩展：`/omp-update` 用多连接 Range 下载 GitHub release 二进制，绕过 `omp update` 单连接被限速的问题。
+
+> 仅供个人研究/学习用途。与 omp 项目**无关联**。MIT。
+
+## 为什么需要它
+
+`omp update` 用**单条 HTTP 流**下载 release 资产（`cli/update-cli.ts` 的 `downloadVerifiedBinary`）。在跨境链路上单连接常被限速到几百 KB/s，而同一 asset 开多条连接几乎线性叠加。本机同一时刻实测（`omp-windows-x64.exe`，v18.3.2，235 MB）：
+
+| 方式 | 吞吐 |
+| --- | --- |
+| 单连接（`omp update` 行为） | 0.21–0.66 MB/s |
+| 8 连接分片 | 1.8–2.0 MB/s |
+| 16 连接分片 | **3.6 MB/s**（235 MB / 63 s） |
+
+即同一份字节，快约 14 倍。
+
+## 安装
+
+```bash
+omp plugin marketplace add Anymore0010/omp-plugins
+omp plugin install omp-fast-update@omp-plugins
+```
+
+或本地开发（`~/.omp/agent/config.yml`）：
+
+```yaml
+extensions:
+  - D:/Projects/omp-plugins/omp-fast-update
+```
+
+## 用法
+
+```
+/omp-update                 检查并安装最新版（默认 8 连接、8 MB 分片）
+/omp-update --check         只看是否有新版本
+/omp-update --force         已是最新也重装
+/omp-update --canary        走 canary 渠道
+/omp-update -j 16           16 并发分片
+/omp-update --chunk 16      每片 16 MB
+/omp-update --version 18.3.2  安装指定版本
+```
+
+别名 `/fast-update`。`--help` 打印完整用法。
+
+## 它做了什么
+
+1. **版本解析** —— 与 `omp update` 同源：先查 npm registry（`latest` / `canary` dist-tag，无限流），再用 GitHub release `v<version>` 元数据取资产 URL、size 与 `sha256:` digest。若清单声明 `omp.dist` 非 npm，或发布版本主号高于当前版本，则判定为二进制分发。
+2. **平台资产** —— `omp-windows-x64.exe` / `omp-darwin-arm64` / `omp-linux-musl-x64` 等，与 omp 自身的映射一致（含 musl 探测）。
+3. **并发分片下载** —— `HEAD`/Range 探测确认支持 206 后，把资产切成固定大小分片，N 个 worker 各写自己那段偏移（文件预分配、`write(..., position)` 不共享写指针）。每片必须**字节数严格相等**；任何短读/断流都**整片重下**（绝不 `-C -` 式续传，避免重叠损坏），指数退避，默认 6 次。
+4. **校验** —— 全部完成后统一校验 size 与 SHA-256（与 release 元数据比对）；任何不符都删掉暂存文件并报错，**不会**把半成品当成成功。
+5. **安装与回滚** —— 暂存文件与目标同目录（保证 rename 同卷）：把现启动器改名为 `<target>.<时间戳>.<pid>.bak`，把新文件 rename 就位，再执行 `<target> --version` 校验；不符则**回滚**回旧启动器。交换期间用 `<target>.fast-update.lock` 串行化，避免两个更新同时换。残留的 `.new`/`.bak` 会在后续运行中回收（`.new` 仅在超过下载窗口后回收，避免删掉并发下载中的临时文件）。
+
+## 边界（重要）
+
+- **只处理独立二进制安装**。启动器是符号链接、shell/`cmd`/`ps1` shim、或非 `.exe` 时会被识别为包管理器（bun/npm/brew/mise）安装，命令只报告并指向 `omp update`，不做任何替换。
+- **不做 bun/npm 全局重装**。`omp.dist: npm` 的发布由 `omp update` 负责。
+- **Windows 上旧备份可能删不掉**：正在运行的进程镜像无法 unlink，`<target>.<stamp>.bak` 会留给下次运行回收（与 `omp update` 行为一致）。
+- **需要 Range 支持**：若服务器不返回 206，自动退回单连接下载（仍然做 size/digest 校验），此时不会有加速。
+- **代理**：沿用进程环境（Bun `fetch` 遵循 `HTTPS_PROXY`）。
+- **GitHub API 限流**：取 release 元数据用的是 GitHub API（未认证时可能 403）；设置 `GITHUB_TOKEN` 或 `GH_TOKEN` 即可。
+
+## 原理速览
+
+```
+/omp-update
+   ├─ npm registry        → 版本（latest / canary dist-tag）
+   ├─ GitHub release API  → asset url + size + sha256
+   ├─ N × Range 请求      → 分片写入预分配文件（各写各的偏移）
+   ├─ size + sha256       → 与 release 元数据比对（不符即删）
+   └─ rename 交换 + --version 校验 → 失败回滚
+```
+
+## 开发
+
+```bash
+cd omp-fast-update
+npm install
+node node_modules/typescript/lib/tsc.js --noEmit -p tsconfig.json
+```
+
+源码：
+
+| 文件 | 职责 |
+| --- | --- |
+| `src/index.ts` | 扩展入口：注册 `/omp-update`、`/fast-update`，桥接 `ctx.ui` |
+| `src/cli.ts` | 参数解析与用法文本 |
+| `src/release.ts` | 版本/渠道解析、平台资产名、GitHub release 元数据校验 |
+| `src/download.ts` | 并发分片下载 + sha256/size 校验（含单连接回退） |
+| `src/replace.ts` | 启动器归属判定、锁、暂存/交换/回滚、残留回收 |
+| `src/update.ts` | 编排：解析 → 下载 → 校验 → 安装，UI 文案 |
+
+## 许可证
+
+MIT，见 [LICENSE](./LICENSE)。

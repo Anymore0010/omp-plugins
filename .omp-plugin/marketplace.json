@@ -4,7 +4,7 @@
     "name": "Anymore0010"
   },
   "metadata": {
-    "description": "omp extensions that bridge desktop-app model accounts into omp.",
+    "description": "omp extensions that bridge desktop-app model accounts into omp, plus utilities.",
     "version": "1.0.0"
   },
   "plugins": [
@@ -23,6 +23,14 @@
       "description": "把小米 MiMo 桌面版模型接入 omp（零配置复用小米账号登录态）。",
       "license": "MIT",
       "category": "provider"
+    },
+    {
+      "name": "omp-fast-update",
+      "source": "./omp-fast-update",
+      "version": "0.1.0",
+      "description": "并发分片自更新：/omp-update 多连接下载 GitHub release 二进制，绕过 omp update 单连接限速。",
+      "license": "MIT",
+      "category": "utility"
     }
   ]
 }

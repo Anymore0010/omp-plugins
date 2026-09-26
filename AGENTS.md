@@ -16,6 +16,7 @@ AGENTS.md                      # 本文件：仓库规范
 README.md  LICENSE  .gitignore # 仓库级文件
 omp-workbuddy-connect/         # 插件 A
 omp-mimo-connect/              # 插件 B
+omp-fast-update/               # 插件 C（工具类：并发分片自更新）
 ```
 
 - **一个插件 = 一个子目录 = 一个独立 npm 包**，自带 `package.json` / `tsconfig.json` / `src/` / `README.md`。

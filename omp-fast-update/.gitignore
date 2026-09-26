@@ -1,0 +1,7 @@
+node_modules/
+out/
+*.mjs
+*.mts
+*.log
+tmp/
+.verify-out/

@@ -13,6 +13,7 @@ omp plugin marketplace add Anymore0010/omp-plugins
 # 2. 按需安装（可分别安装 / 升级 / 卸载）
 omp plugin install omp-workbuddy-connect@omp-plugins
 omp plugin install omp-mimo-connect@omp-plugins
+omp plugin install omp-fast-update@omp-plugins
 
 # 查看与升级
 omp plugin list
@@ -25,6 +26,7 @@ omp plugin upgrade
 | --- | --- | --- |
 | [`omp-workbuddy-connect`](./omp-workbuddy-connect) | 把 **WorkBuddy 桌面版**的模型接入 omp（`workbuddy/*`）。loopback shim + 复用桌面端鉴权文件。 | 已安装并登录 WorkBuddy 桌面版；omp ≥ 17.4.0 |
 | [`omp-mimo-connect`](./omp-mimo-connect) | 把 **小米 MiMo 桌面版**的模型接入 omp（`mimo/*`）。Chromium Cookie 解密 + SSO 换 serviceToken。 | 已安装并登录 MiMo 桌面版；首次读取 Cookie 需关闭 MiMo |
+| [`omp-fast-update`](./omp-fast-update) | **并发分片自更新**：`/omp-update` 多连接 Range 下载 GitHub release 二进制，绕过 `omp update` 的单连接限速（实测 0.3 → 3.6 MB/s）。 | 独立二进制安装（非 bun/npm/brew/mise 管理） |
 
 各插件的原理、风险与限制见各自子目录的 `README.md`（MiMo 的上游协议细节见其 `RESEARCH.md`）。
 
@@ -35,6 +37,7 @@ omp plugin upgrade
 AGENTS.md                      # 本仓库的开发与发布规范（提交身份、版本流程、tag 命名）
 omp-workbuddy-connect/         # 插件 A（独立 npm 包，独立版本号）
 omp-mimo-connect/              # 插件 B（独立 npm 包，独立版本号）
+omp-fast-update/               # 插件 C（独立 npm 包，独立版本号）
 ```
 
 约定：
@@ -53,6 +56,7 @@ omp-mimo-connect/              # 插件 B（独立 npm 包，独立版本号）
 extensions:
   - D:/Projects/omp-plugins/omp-workbuddy-connect
   - D:/Projects/omp-plugins/omp-mimo-connect
+  - D:/Projects/omp-plugins/omp-fast-update
 ```
 
 类型检查（在每个插件子目录内）：
