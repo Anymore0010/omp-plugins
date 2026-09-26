@@ -24,6 +24,7 @@
 import type { ExtensionAPI, ExtensionCommandContext } from "@oh-my-pi/pi-coding-agent"
 import { runFastUpdate, type UpdateIo } from "./update"
 import { parseArgs, USAGE } from "./cli"
+import { installCliShim } from "./shim"
 
 /** omp version the extension is running inside. Read from `pi.pi`, not the CLI. */
 function runningVersion(pi: ExtensionAPI): string {
@@ -82,5 +83,12 @@ export default async function fastUpdate(pi: ExtensionAPI): Promise<void> {
   pi.registerCommand("fast-update", {
     description: "并发分片下载安装 omp 更新（/omp-update 的别名）",
     handler,
+  })
+  pi.registerCommand("omp-update-install-cli", {
+    description: "把 omp-fast-update 命令装到 PATH（终端可直接运行）",
+    handler: async (_args, ctx) => {
+      const result = await installCliShim()
+      ioFor(ctx).notify(result.message, result.ok ? "info" : "error")
+    },
   })
 }

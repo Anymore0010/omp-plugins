@@ -129,7 +129,7 @@ async function withTargetLock<T>(targetPath: string, action: () => Promise<T>): 
 }
 
 /** Version a launcher reports, parsed from `omp/X.Y.Z` output. */
-async function reportedVersionAt(binaryPath: string): Promise<string | undefined> {
+export async function reportedVersionAt(binaryPath: string): Promise<string | undefined> {
 	try {
 		const proc = Bun.spawn([binaryPath, "--version"], { stdout: "pipe", stderr: "pipe" })
 		const [stdout, exitCode] = await Promise.all([new Response(proc.stdout).text(), proc.exited])
@@ -163,7 +163,7 @@ export interface InstallResult {
  */
 export async function installStagedBinary(options: InstallOptions): Promise<InstallResult> {
 	return await withTargetLock(options.targetPath, async () => {
-		const stamp = `${Date.now()}.${process.pid}.${stagingSeq++}`
+		const stamp = `${ARTIFACT_MARKER}.${Date.now()}.${process.pid}.${stagingSeq++}`
 		const backupPath = `${options.targetPath}.${stamp}.bak`
 		const previousVersion = await reportedVersionAt(options.targetPath)
 
@@ -215,25 +215,39 @@ export async function installStagedBinary(options: InstallOptions): Promise<Inst
 		if (backupReady) await fs.promises.rm(backupPath, { force: true }).catch(() => undefined)
 		// Awaited, not fire-and-forget: a sweep outliving this lock could unlink
 		// the next process's backup mid-verify and leave it with nothing to roll
-		// back to. Holding the lock makes unconditional backup reaping safe.
-		await sweepStaleArtifacts(options.targetPath, { inLock: true })
+		// back to.
+		await sweepStaleArtifacts(options.targetPath)
 		return { path: options.targetPath, previousVersion }
 	})
 }
 
 /**
- * Remove `<target>.<stamp>.(new|bak)` leftovers from earlier runs.
+ * Marker embedded in this plugin's artifact names.
  *
- * Both suffixes are age-gated by default: a `.new` belongs to a download that
- * may still be running, and a `.bak` may be the backup another process's
- * rename→verify→rollback window still needs. Callers that already hold the
- * per-target lock pass `{ inLock: true }` to reap backups unconditionally —
- * nothing else can be mid-swap on that target then.
- *
- * Deletion is always best effort: Windows refuses to unlink the running image,
- * and a locked file only becomes removable after its owning process exits.
+ * The stock updater writes `<binary>.<timestamp>.<pid>.<seq>.(new|bak)` and
+ * reclaims anything matching that numeric shape. If this plugin wrote the same
+ * names, its sweeper and omp's would each delete the other's files — the user's
+ * only rollback copy included. Every artifact this plugin creates carries
+ * {@link ARTIFACT_MARKER}, and the sweeper ignores everything else, so the two
+ * updaters can never reap each other's backups.
  */
-export async function sweepStaleArtifacts(targetPath: string, options: { inLock?: boolean } = {}): Promise<void> {
+const ARTIFACT_MARKER = ".ompfastupdate"
+/** Kept long enough to cover any realistic manual rollback, then reclaimed. */
+const BACKUP_KEEP_MS = 7 * 24 * 60 * 60_000
+
+/**
+ * Remove this plugin's own `<target>.*.ompfastupdate.(new|bak)` leftovers.
+ *
+ * Only artifacts carrying {@link ARTIFACT_MARKER} are considered, so the stock
+ * updater's backups (`<binary>.<numbers>.bak`) are never touched — they are the
+ * user's rollback point and omp reclaims them itself. `.new` files are reaped
+ * once past the download window (a live download must never lose its temp), and
+ * `.bak` files are kept for {@link BACKUP_KEEP_MS} so a rollback stays possible.
+ *
+ * Deletion is always best effort: Windows refuses to unlink a mapped image, and
+ * a locked file only becomes removable once its owning process exits.
+ */
+export async function sweepStaleArtifacts(targetPath: string): Promise<void> {
 	const dir = path.dirname(targetPath)
 	const base = path.basename(targetPath)
 	let entries: string[]
@@ -244,20 +258,16 @@ export async function sweepStaleArtifacts(targetPath: string, options: { inLock?
 	}
 	const now = Date.now()
 	for (const entry of entries) {
-		if (!entry.startsWith(`${base}.`)) continue
+		if (!entry.startsWith(`${base}.`) || !entry.includes(ARTIFACT_MARKER)) continue
 		const suffix = entry.endsWith(".new") ? ".new" : entry.endsWith(".bak") ? ".bak" : undefined
 		if (suffix === undefined) continue
-		const middle = entry.slice(base.length + 1, entry.length - suffix.length)
-		if (middle.length === 0 || !/^\d+(\.\d+)*$/u.test(middle)) continue
 		const full = path.join(dir, entry)
-		const reapUnconditional = suffix === ".new" ? false : options.inLock === true
-		if (!reapUnconditional) {
-			const age = await fs.promises
-				.stat(full)
-				.then(stat => now - stat.mtimeMs)
-				.catch(() => 0)
-			if (age < DOWNLOAD_WINDOW_MS) continue
-		}
+		const maxAge = suffix === ".new" ? DOWNLOAD_WINDOW_MS : BACKUP_KEEP_MS
+		const age = await fs.promises
+			.stat(full)
+			.then(stat => now - stat.mtimeMs)
+			.catch(() => 0)
+		if (age < maxAge) continue
 		await fs.promises.rm(full, { force: true }).catch(() => undefined)
 	}
 }
@@ -265,12 +275,16 @@ export async function sweepStaleArtifacts(targetPath: string, options: { inLock?
 /**
  * Monotonic per-process counter so two stagings in the same millisecond (same
  * pid, same `Date.now()`) still get distinct paths — a collision would make the
- * second update delete the first one's temp file. Kept numeric (and dot-joined)
- * so {@link sweepStaleArtifacts}'s `\d+(\.\d+)*` matcher still reclaims them.
+ * second update delete the first one's temp file.
  */
 let stagingSeq = 0
 
-/** Unique staging path beside the target, so the swap is a same-volume rename. */
+/**
+ * Unique staging path beside the target, so the swap is a same-volume rename.
+ *
+ * The {@link ARTIFACT_MARKER} in the name is what keeps this plugin's sweeper
+ * and the stock updater's from reclaiming each other's files.
+ */
 export function stagingPathFor(targetPath: string): string {
-	return `${targetPath}.${Date.now()}.${process.pid}.${stagingSeq++}.new`
+	return `${targetPath}${ARTIFACT_MARKER}.${Date.now()}.${process.pid}.${stagingSeq++}.new`
 }

@@ -132,7 +132,8 @@ export function parseArgs(raw: string): ParsedArgs {
 export const USAGE = `omp-fast-update — 并发分片安装 omp 更新
 
 用法：
-  /omp-update [选项]
+  omp-fast-update [选项]        （终端）
+  /omp-update [选项]            （omp 会话内）
 
 选项：
   -c, --check            只检查是否有新版本，不安装
@@ -144,4 +145,9 @@ export const USAGE = `omp-fast-update — 并发分片安装 omp 更新
       --chunk <MB>       每个分片大小，单位 MB（1-128，默认 8）
 
 仅适用于独立二进制安装（~/.local/bin 或 AppData 下的 omp 可执行文件）。
-brew / mise / nix / npm / bun 管理的安装请继续用 \`omp update\`。`
+brew / mise / nix / npm / bun 管理的安装请继续用 \`omp update\`。
+
+把命令装到 PATH（终端可直接运行 omp-fast-update）：
+      --install-cli      在 omp 所在目录生成 omp-fast-update shim
+      --status-cli       查看 shim 状态（升级插件后需重装）
+      --uninstall-cli    删除 shim`

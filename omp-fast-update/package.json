@@ -1,6 +1,6 @@
 {
   "name": "omp-fast-update",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Parallel (multi-connection) self-update for omp: bypasses single-stream throttling on GitHub release downloads.",
   "type": "module",
   "omp": {
