@@ -174,6 +174,13 @@ export async function installStagedBinary(options: InstallOptions): Promise<Inst
 		try {
 			await fs.promises.rename(options.targetPath, backupPath)
 			backupReady = true
+			// `rename` preserves the source's mtime, so the backup would inherit the
+			// PREVIOUS binary's timestamp — possibly months old. Aging is measured
+			// from mtime, so an old launcher would make the backup look expired and
+			// the sweep would delete the rollback copy the install just created.
+			// Stamp it with now so the retention window starts at backup creation.
+			const now = new Date()
+			await fs.promises.utimes(backupPath, now, now).catch(() => undefined)
 		} catch (error) {
 			// A missing target is tolerated: the release binary is simply placed at
 			// a vacant path, and there is nothing to restore on failure.
