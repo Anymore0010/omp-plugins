@@ -17,7 +17,7 @@ import {
 	resolveReleaseAsset,
 	type Channel,
 } from "./release"
-import { classifyTarget, installStagedBinary, resolveLauncherPath, stagingPathFor, sweepStaleArtifacts } from "./replace"
+import { classifyTarget, installStagedBinary, resolveLauncherPath, stagingPathFor } from "./replace"
 import type { FastUpdateOptions } from "./cli"
 
 /** Side effects the flow needs, injected so the command layer owns presentation. */
@@ -115,9 +115,6 @@ export async function runFastUpdate(options: FastUpdateOptions, context: UpdateC
 	// Canary releases are published as GitHub prereleases, so the channel has to
 	// authorize them here or `--canary` could never install anything.
 	const asset = await resolveReleaseAsset(version, binaryName, channel === "canary")
-	// Leftovers from earlier runs whose owning process has exited (a backup that
-	// was still the running image back then, or a temp from a killed download).
-	await sweepStaleArtifacts(ownership.path).catch(() => undefined)
 	io.progress(`下载 ${binaryName}（${formatMegabytes(asset.size)}）…`)
 
 	// The CLI validates the tier; the chunk count caps it further for small assets.
@@ -158,7 +155,7 @@ export async function runFastUpdate(options: FastUpdateOptions, context: UpdateC
 	io.clearProgress()
 	io.notify(
 		`已更新到 omp/${version}（原 omp/${result.previousVersion ?? "未知"}），重启 omp 生效。` +
-			(result.backupPath === undefined ? "" : `\n回退副本：${result.backupPath}（保留 7 天后自动回收）`),
+			(result.backupPath === undefined ? "" : `\n回退副本：${result.backupPath}（保留下次更新前可回退）`),
 		"info",
 	)
 }

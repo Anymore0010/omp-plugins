@@ -85,7 +85,10 @@ shim 由 `omp-fast-update-run.mjs`（运行时解析）+ `.cmd`/`.ps1` 入口组
 
    > ⚠️ 这就是 v0.1.3 修掉的一个真实事故：v0.1.0–0.1.2 沿用 omp 自己的命名（`<binary>.<数字>.<数字>.<数字>.bak`），其清理按该数字形状回收，**删掉了用户由 `omp update` 产生的备份**；omp 的清理也会反过来删本插件的文件。加标记后两个清理器互不可见。
 
-   带标记的 `.new` 超过 15 分钟回收；带标记的 `.bak` 保留 **7 天**后回收（留出人工回滚窗口）。
+   **备份保留策略与 `omp update` 一致**：每次更新**先删掉上一次的备份**，再把当前 `omp.exe` 改名为备份，最后装入新版。因此目录里**恒定只有 1 个备份 = 上一个版本**，不会累积。
+   （`omp update` 源码 `sweepStaleUpdateArtifacts` 对 `.bak` 也是**无条件回收**，只有 `.new` 按时间窗回收；它自己的备份之所以"留下"，是因为运行时被替换的就是正在执行的镜像，Windows 拒绝 unlink——不是刻意保留。）
+
+   带标记的 `.new` 超过 15 分钟回收（可能在并发下载中被占用）；本安装正要使用的暂存文件永不回收。
 
 ## 边界（重要）
 
@@ -93,6 +96,7 @@ shim 由 `omp-fast-update-run.mjs`（运行时解析）+ `.cmd`/`.ps1` 入口组
 - **不做 bun/npm 全局重装**（不解析 `omp.dist`；靠启动器形态判定）。
 - **`--canary` 走 GitHub prerelease**：canary 版本是预发布，只有 `--canary` 渠道放行。
 - **Windows 上本插件的旧备份可能删不掉**：正在运行的进程镜像无法 unlink，带标记的 `<target>.ompfastupdate.<stamp>.bak` 只能等持有它的进程退出；`omp update` 自己的备份（无标记）**本插件永不删除**。
+- **备份只在真的替换后产生**：`--check` 或已是最新版（未发生替换）不会新增 `.bak`。
 - **需要 Range 支持**：若服务器不返回 206，自动退回单连接下载（仍然做 size/digest 校验），此时不会有加速。
 - **代理**：沿用进程环境（Bun `fetch` 遵循 `HTTPS_PROXY`）。
 - **GitHub API 限流**：取 release 元数据用的是 GitHub API（未认证时可能 403）；设置 `GITHUB_TOKEN` 或 `GH_TOKEN` 即可。

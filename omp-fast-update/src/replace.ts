@@ -170,17 +170,18 @@ export async function installStagedBinary(options: InstallOptions): Promise<Inst
 		const backupPath = `${options.targetPath}${ARTIFACT_MARKER}.${stamp}.bak`
 		const previousVersion = await reportedVersionAt(options.targetPath)
 
+		// Reap earlier backups BEFORE creating this one, so the retained rollback
+		// point is always exactly the immediately previous version — the same
+		// steady state `omp update` reaches (it deletes its backup too; on Windows
+		// the running-image lock is what makes one survive). Doing this first also
+		// keeps the fresh backup out of the sweep's reach, so no age bookkeeping
+		// is needed to protect it.
+		await sweepStaleArtifacts(options.targetPath, { keep: options.stagedPath })
+
 		let backupReady = false
 		try {
 			await fs.promises.rename(options.targetPath, backupPath)
 			backupReady = true
-			// `rename` preserves the source's mtime, so the backup would inherit the
-			// PREVIOUS binary's timestamp — possibly months old. Aging is measured
-			// from mtime, so an old launcher would make the backup look expired and
-			// the sweep would delete the rollback copy the install just created.
-			// Stamp it with now so the retention window starts at backup creation.
-			const now = new Date()
-			await fs.promises.utimes(backupPath, now, now).catch(() => undefined)
 		} catch (error) {
 			// A missing target is tolerated: the release binary is simply placed at
 			// a vacant path, and there is nothing to restore on failure.
@@ -220,14 +221,10 @@ export async function installStagedBinary(options: InstallOptions): Promise<Inst
 			)
 		}
 
-		// Swap verified. Keep the backup as a rollback point, matching what
-		// `omp update` leaves behind: it runs while the target IS the running
-		// image, so Windows refuses to unlink it and the `.bak` survives. This
-		// command runs under `bun`, where that lock does not exist — deleting
-		// here would make `omp-fast-update` the one updater that leaves no way
-		// back. The marked backup is reclaimed by age (BACKUP_KEEP_MS), so it
-		// does not accumulate.
-		await sweepStaleArtifacts(options.targetPath)
+		// Swap verified. The previous binary stays beside the target as the
+		// rollback point — the steady state `omp update` also reaches. Earlier
+		// backups were already reaped before this one was created, so exactly one
+		// is kept and none accumulate.
 		return { path: options.targetPath, previousVersion, backupPath: backupReady ? backupPath : undefined }
 	})
 }
@@ -243,22 +240,24 @@ export async function installStagedBinary(options: InstallOptions): Promise<Inst
  * updaters can never reap each other's backups.
  */
 const ARTIFACT_MARKER = ".ompfastupdate"
-/** Kept long enough to cover any realistic manual rollback, then reclaimed. */
-const BACKUP_KEEP_MS = 7 * 24 * 60 * 60_000
 
 /**
- * Remove this plugin's own `<target>.*.ompfastupdate.(new|bak)` leftovers.
+ * Remove this plugin's own earlier `<target>.*.ompfastupdate.(new|bak)` files.
  *
  * Only artifacts carrying {@link ARTIFACT_MARKER} are considered, so the stock
- * updater's backups (`<binary>.<numbers>.bak`) are never touched — they are the
- * user's rollback point and omp reclaims them itself. `.new` files are reaped
- * once past the download window (a live download must never lose its temp), and
- * `.bak` files are kept for {@link BACKUP_KEEP_MS} so a rollback stays possible.
+ * updater's `<binary>.<numbers>.bak` is never touched — that one is the user's
+ * rollback point and omp reclaims it itself.
  *
- * Deletion is always best effort: Windows refuses to unlink a mapped image, and
- * a locked file only becomes removable once its owning process exits.
+ * `.bak` files are reaped unconditionally, matching `omp update`'s own sweep
+ * (`sweepStaleUpdateArtifacts` only age-gates `.new`). Callers therefore run
+ * this BEFORE creating the new backup, which leaves exactly one backup behind:
+ * the immediately previous version. `.new` keeps its age gate because a temp
+ * file may belong to a download still in flight.
+ *
+ * Deletion is best effort: Windows refuses to unlink a mapped image, so a locked
+ * file simply survives until its owning process exits.
  */
-export async function sweepStaleArtifacts(targetPath: string): Promise<void> {
+export async function sweepStaleArtifacts(targetPath: string, options: { keep?: string } = {}): Promise<void> {
 	const dir = path.dirname(targetPath)
 	const base = path.basename(targetPath)
 	let entries: string[]
@@ -268,17 +267,24 @@ export async function sweepStaleArtifacts(targetPath: string): Promise<void> {
 		return
 	}
 	const now = Date.now()
+	// Compare on resolved paths: `path.join` normalizes separators, so a caller's
+	// forward-slash staging path would not string-match the joined entry.
+	const keep = options.keep === undefined ? undefined : path.resolve(options.keep)
 	for (const entry of entries) {
 		if (!entry.startsWith(`${base}.`) || !entry.includes(ARTIFACT_MARKER)) continue
+		const full = path.join(dir, entry)
+		// Never reap a file this install is about to use (the staged binary shares
+		// the marker and may carry an inherited mtime).
+		if (keep !== undefined && path.resolve(full) === keep) continue
 		const suffix = entry.endsWith(".new") ? ".new" : entry.endsWith(".bak") ? ".bak" : undefined
 		if (suffix === undefined) continue
-		const full = path.join(dir, entry)
-		const maxAge = suffix === ".new" ? DOWNLOAD_WINDOW_MS : BACKUP_KEEP_MS
-		const age = await fs.promises
-			.stat(full)
-			.then(stat => now - stat.mtimeMs)
-			.catch(() => 0)
-		if (age < maxAge) continue
+		if (suffix === ".new") {
+			const age = await fs.promises
+				.stat(full)
+				.then(stat => now - stat.mtimeMs)
+				.catch(() => 0)
+			if (age < DOWNLOAD_WINDOW_MS) continue
+		}
 		await fs.promises.rm(full, { force: true }).catch(() => undefined)
 	}
 }
