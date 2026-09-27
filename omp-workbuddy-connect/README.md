@@ -34,6 +34,7 @@ omp 对 `fetchDynamicModels` 的动态列表有 **24 小时缓存**：正常打�
 行为：
 
 - 先探活上游。若未登录桌面版、或凭据文件无法解密、或上游不可达、或返回空列表，会提示对应原因并**保留现有列表**，不会清空。
+- 上游不可达或返回空列表时，插件**不会**把静态兜底目录当作"实时发现"上报 —— 否则 omp 会把那些硬编码费率当作真实结果缓存 24 小时。此时该次发现整体失败，omp 保留既有列表并在退避后重试。
 - 成功则调用 `ctx.modelRegistry.refreshProvider("workbuddy")`（默认 `online` 策略，不受 24h 缓存门控）强制联网刷新。
 - 完成后弹出提示，例如 `已强制刷新：共 N 个模型，本次新增 X 个`（无新增则提示「无新增」）。
 
@@ -93,13 +94,14 @@ omp 加载的入口是 `src/index.ts`。其余模块：
 - `src/upstream.ts` — WorkBuddy 上游 wire 客户端（chat / models / refresh）
 - `src/store.ts` — 凭据存储 + 按需刷新
 - `src/server.ts` — loopback OpenAI 兼容 shim + SSE 归一化
-- `src/catalog.ts` — 静态兜底模型目录
+- `src/catalog.ts` — 静态兜底模型目录（仅用于上游不可达时 omp 的兜底显示；不作为"实时发现"结果上报）
 
 ## 关于聊天记录
 
 通过本插件发出的对话**会像桌面端一样被 WorkBuddy 服务端记录**，这**不是插件行为**，无法从插件侧关闭：
 
-- 插件唯一的落盘是 `~/.omp/.workbuddy-auth.json`（复制复用桌面端登录态），**不写入任何聊天内容**。
+- 插件唯一的落盘是 `~/.omp/.workbuddy-auth.json`：令牌**以明文 JSON 保存**（与桌面端 5.6+ 的静态加密不同），用途是让插件侧的刷新存活于重启；文件位于你的用户目录内。**不写入任何聊天内容。**
+- 为解开桌面端 5.6+ 的加密字段，插件会以 `ELECTRON_RUN_AS_NODE=1` **启动 WorkBuddy 自带的可执行文件一次**（无窗口、不进入桌面 UI），仅用于读取其私有绑定返回的保护钥；密钥只驻留内存，不落盘、不写日志。可用 `WORKBUDDY_ELECTRON_BIN` 指定该可执行文件的位置。
 - 记录发生在**服务端，按账号归档**（`X-User-Id` + bearer token）。插件以你的桌面端身份发起请求，因此落在同一个云端会话/用量历史里。
 - 已核查过 WorkBuddy 桌面客户端包（`app.asar`）：其中**不存在**"不记录/临时会话"类开关或字段（`noMemory`、`temporary`、`store:false` 等一律无命中），请求体也只由 `messages/model/stream/stream_options/tool_choice/reasoning_effort` 构成，没有可供镜像的持久化开关。
 - 结论：这是**上游账号属性**，不是可配置项。介意记录的话，唯一可控手段是**改用不共享该账号的渠道**。

@@ -23,6 +23,7 @@ import { execFile } from "node:child_process"
 import { accessSync, constants, readFileSync, statSync } from "node:fs"
 import { createDecipheriv, createHash } from "node:crypto"
 import { basename, dirname, join } from "node:path"
+import { homedir } from "node:os"
 
 /** Overrides the WorkBuddy binary spawned as the key helper. */
 export const WORKBUDDY_ELECTRON_BIN_ENV = "WORKBUDDY_ELECTRON_BIN"
@@ -40,7 +41,8 @@ const WINDOWS_UNINSTALL_ROOTS = [
 /** The app registers this URL scheme, and the command names its own binary. */
 const WINDOWS_PROTOCOL_COMMAND_KEY = "HKCU\\Software\\Classes\\workbuddy\\shell\\open\\command"
 
-const MACOS_ELECTRON_RELATIVE = ["Applications", "WorkBuddy.app", "Contents", "MacOS", "Electron"] as const
+/** Absolute: `join` of a bare first segment would be a relative path. */
+const MACOS_ELECTRON_PATH = "/Applications/WorkBuddy.app/Contents/MacOS/Electron"
 const WINDOWS_DEFAULT_RELATIVE = ["Programs", "WorkBuddy", "WorkBuddy.exe"] as const
 
 const WINDOWS_VERSION_PATTERN = /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/u
@@ -247,7 +249,7 @@ function isExecutable(path: string): boolean {
 
 /** The platform's default install location, or `undefined` where unverified. */
 export function defaultElectronPath(platform: NodeJS.Platform = process.platform): string | undefined {
-  if (platform === "darwin") return join(...MACOS_ELECTRON_RELATIVE)
+  if (platform === "darwin") return MACOS_ELECTRON_PATH
   if (platform !== "win32") return undefined
   const localAppData = process.env.LOCALAPPDATA?.trim()
   if (localAppData === undefined || localAppData === "") return undefined
@@ -287,62 +289,104 @@ function queryRegistry(regPath: string, key: string, recursive: boolean): Promis
 }
 
 /**
- * Pull `.exe` paths out of `reg query` output.
- *
- * The value *name* is not matched: `reg query` localizes the default value's
- * label ("(Default)" / "(默认)") and DisplayIcon is only one of several names
- * that can carry the path. Every value line is scanned and only lines whose
- * data actually holds an `.exe` path contribute, which keeps matching
- * independent of the OS display language.
+ * The install path the app records for itself in its own config dir. This is
+ * free (one small file read) compared with a registry scan, and it survives
+ * installs the uninstall records do not describe.
  */
-function executablesInRegistryOutput(output: string): string[] {
-  const found: string[] = []
-  for (const line of output.split(/\r?\n/u)) {
-    const data = /^\s+\S+\s+REG_(?:SZ|EXPAND_SZ)\s+(.*?)\s*$/iu.exec(line)
-    if (data === null) continue
-    const raw = data[1] ?? ""
-    const quoted = /^"([^"]+\.exe)"/iu.exec(raw)
-    if (quoted !== null) {
-      found.push(quoted[1]!)
-      continue
-    }
-    const bare = /^(.+?\.exe)(?:,\d+)?$/iu.exec(raw)
-    if (bare !== null) found.push(bare[1]!)
+function configuredInstallHints(): string[] {
+  const override = process.env.WORKBUDDY_CONFIG_DIR?.trim() || process.env.CODEBUDDY_CONFIG_DIR?.trim()
+  const configDir = override !== undefined && override !== "" ? override : join(homedir(), ".workbuddy")
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(join(configDir, "settings.json"), "utf8"))
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return []
+    const marker = (parsed as Record<string, unknown>).officeFileAssociationsRepairMarker
+    if (typeof marker !== "string") return []
+    // `v3:win32:5.6.2:D:\Program Files\WorkBuddy\WorkBuddy.exe:WorkBuddy:...`
+    const match = /[A-Za-z]:\\[^:]*?WorkBuddy\.exe/iu.exec(marker)
+    return match === null ? [] : [match[0]]
+  } catch {
+    return []
   }
-  return found
 }
 
 /**
- * Find the installed Windows binary through its own registry records. The
- * default location is the ordinary case; this covers installs elsewhere.
+ * Pull the values of each registry key out of `reg query /s` output.
+ *
+ * Values are buffered per key and judged only once the key's block ends:
+ * `reg query` emits a key's values in an order this code must not assume, so
+ * matching a `DisplayIcon` only after having seen the `DisplayName` beside it
+ * would silently drop entries whenever the icon comes first.
+ */
+function registryEntries(output: string): Array<{ displayName?: string, displayIcon?: string }> {
+  const entries: Array<{ displayName?: string, displayIcon?: string }> = []
+  let current: { displayName?: string, displayIcon?: string } | undefined
+  for (const line of output.split(/\r?\n/u)) {
+    if (/^\s*HKEY_/iu.test(line)) {
+      current = {}
+      entries.push(current)
+      continue
+    }
+    if (current === undefined) continue
+    const value = /^\s+(\S+)\s+REG_(?:SZ|EXPAND_SZ)\s+(.*?)\s*$/iu.exec(line)
+    if (value === null) continue
+    const name = value[1]!.toLowerCase()
+    const data = value[2] ?? ""
+    if (name === "displayname") current.displayName = data
+    else if (name === "displayicon") current.displayIcon = data
+  }
+  return entries
+}
+
+/** Read a Windows uninstall record's declared `WorkBuddy.exe`. */
+function installPathFromUninstallEntry(entry: { displayName?: string, displayIcon?: string }): string | undefined {
+  if (entry.displayName === undefined) return undefined
+  if (!WINDOWS_WORKBUDDY_DISPLAY_NAME_PATTERN.test(entry.displayName.trim())) return undefined
+  const icon = entry.displayIcon
+  if (icon === undefined) return undefined
+  const quoted = /^"([^"]+\.exe)"/iu.exec(icon.trim())
+  const path = quoted !== null ? quoted[1]! : /^(.+?\.exe)(?:,\d+)?$/iu.exec(icon.trim())?.[1]
+  return path !== undefined && path.toLowerCase().endsWith(".exe") ? path : undefined
+}
+
+/**
+ * Find the installed Windows binary. Local hints come first because they are
+ * effectively free; the registry is the fallback for installs that leave no
+ * record in the app config. Registry queries run concurrently: on this host a
+ * single `reg.exe` spawn costs seconds, so a sequential scan would outlast the
+ * caller's budget.
  */
 async function discoverWindowsElectronPath(): Promise<string | undefined> {
+  // Cheap local hints are validated before the registry is touched at all: a
+  // `reg.exe` spawn costs seconds on this host, and paying that while a usable
+  // path is already recorded would delay every cold credential read.
+  for (const hint of configuredInstallHints()) {
+    if (isWorkBuddyWindowsInstall(hint)) return hint
+  }
   const systemRoot = process.env.SystemRoot?.trim()
   if (systemRoot === undefined || systemRoot === "") return undefined
   const regPath = join(systemRoot, "System32", "reg.exe")
+  const [hcUninstall, hkUninstall, hkWowUninstall, protocolKey] = await Promise.all([
+    queryRegistry(regPath, WINDOWS_UNINSTALL_ROOTS[0], true),
+    queryRegistry(regPath, WINDOWS_UNINSTALL_ROOTS[1], true),
+    queryRegistry(regPath, WINDOWS_UNINSTALL_ROOTS[2], true),
+    queryRegistry(regPath, WINDOWS_PROTOCOL_COMMAND_KEY, false),
+  ])
   const candidates: string[] = []
-  for (const root of WINDOWS_UNINSTALL_ROOTS) {
-    const output = await queryRegistry(regPath, root, true)
+  for (const output of [hcUninstall, hkUninstall, hkWowUninstall]) {
     if (output === "") continue
-    let currentMatches = false
-    for (const line of output.split(/\r?\n/u)) {
-      const keyMatch = /^\s*(HKEY_[^\r\n]+?)\s*$/iu.exec(line)
-      if (keyMatch !== null) {
-        currentMatches = false
-        continue
-      }
-      const nameMatch = /^\s+DisplayName\s+REG_[A-Z0-9_]+\s+(.*?)\s*$/iu.exec(line)
-      if (nameMatch !== null) {
-        currentMatches = WINDOWS_WORKBUDDY_DISPLAY_NAME_PATTERN.test((nameMatch[1] ?? "").trim())
-        continue
-      }
-      if (!currentMatches) continue
-      const iconMatch = /^\s+DisplayIcon\s+REG_[A-Z0-9_]+\s+(.*?)\s*$/iu.exec(line)
-      if (iconMatch === null) continue
-      candidates.push(...executablesInRegistryOutput(iconMatch[0]))
+    for (const entry of registryEntries(output)) {
+      const path = installPathFromUninstallEntry(entry)
+      if (path !== undefined) candidates.push(path)
     }
   }
-  candidates.push(...executablesInRegistryOutput(await queryRegistry(regPath, WINDOWS_PROTOCOL_COMMAND_KEY, false)))
+  // The `workbuddy://` handler names the binary in its default value; the
+  // value's *name* is localized, so scan every value rather than one label.
+  for (const line of protocolKey.split(/\r?\n/u)) {
+    const value = /^\s+\S+\s+REG_(?:SZ|EXPAND_SZ)\s+(.*?)\s*$/iu.exec(line)
+    if (value === null) continue
+    const quoted = /^"([^"]+\.exe)"/iu.exec((value[1] ?? "").trim())
+    if (quoted !== null) candidates.push(quoted[1]!)
+  }
   const seen = new Set<string>()
   for (const candidate of candidates) {
     const lower = candidate.toLowerCase()

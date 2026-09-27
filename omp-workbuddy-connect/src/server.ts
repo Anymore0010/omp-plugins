@@ -67,20 +67,28 @@ export class WorkBuddyShim {
     return promise
   }
 
-  // Called by the provider's fetchDynamicModels hook.
+  /**
+   * Called by the provider's `fetchDynamicModels` hook.
+   *
+   * Only a genuine live answer is returned; every failure path throws.
+   *
+   * omp registers this hook with `dynamicModelsAuthoritative: true`, so a
+   * successful-but-empty result stays authoritative for the cycle and prunes
+   * the provider's models (`retainModelIds` returns `[]` for an empty dynamic
+   * list), which would blank the WorkBuddy section of the picker on a merely
+   * unreachable upstream. Returning the static fallback instead is no better:
+   * omp would cache those hardcoded rates as a real discovery for 24 h, which
+   * is how a stale billing multiplier gets pinned. A throw is turned into a
+   * non-authoritative `stale` result, so the previous list survives and the
+   * short retry backoff applies.
+   */
   async dynamicModels(): Promise<readonly WorkBuddyUpstreamModel[]> {
     const credential = await this.options.store.current()
-    if (credential === undefined) return this.catalog
-    try {
-      const models = await this.options.client.fetchModels(credential)
-      if (models.length > 0) {
-        this.catalog = models
-        return models
-      }
-    } catch {
-      // keep current catalog
-    }
-    return this.catalog
+    if (credential === undefined) throw new Error("workbuddy: no credential for model discovery")
+    const models = await this.options.client.fetchModels(credential)
+    if (models.length === 0) throw new Error("workbuddy: upstream returned an empty model list")
+    this.catalog = models
+    return models
   }
 
   currentModels(): readonly WorkBuddyUpstreamModel[] {
