@@ -14,6 +14,7 @@ WorkBuddy 桌面端上游（`copilot.tencent.com` / `workbuddy.ai`）**不是** 
 
 1. **Loopback shim** —— 加载时在本机启动一个绑定 `127.0.0.1:<随机端口>` 的 HTTP 服务，暴露标准 OpenAI 格式的 `/v1/chat/completions` 与 `/v1/models`。
 2. **凭据复用** —— 读取 WorkBuddy 桌面应用的鉴权文件（Windows 在 AppData、macOS 在 Application Support、Linux 在 `~/.config` 下的 `CodeBuddyExtension/Data/Public/auth/workbuddy-desktop.info`），并在令牌临近过期时刷新，副本保存在 omp 主目录（`~/.omp/.workbuddy-auth.json`）。插件绝不回写桌面端文件。
+   - **5.6+ 的静态加密**：自 WorkBuddy 5.6 起，该文件里的 `auth.accessToken` / `auth.refreshToken` 不再以明文保存，而是 `{$wbEncrypted:1, envelope}` 包裹体（AES-256-GCM）。插件会照常识别这类文件并解密：以 `ELECTRON_RUN_AS_NODE=1` 启动 WorkBuddy 自带的 Electron 可执行文件一次，取得其私有 `workbuddyStorage` 绑定返回的 `atRestSecretKey`，再派生 `sha256(secret)` 作为保护钥解封字段。密钥仅驻留内存、不落盘、不写日志。
 3. **协议转换** —— `/v1/chat/completions` 把传入的 OpenAI 请求规范化成 WorkBuddy 所需格式（强制 stream、`developer`→`system`、字符串 `tool_choice`、reasoning-effort 降级），用正确的请求头调用上游，并把返回的 SSE 流重建回 OpenAI 白名单（保留 `reasoning_content`、剥离噪声、恰好一个 `[DONE]`）。非流式请求则聚合成一次完整响应。
 4. **Provider 注册** —— 通过 `pi.registerProvider(...)` 把 `workbuddy` provider 指向 loopback，附带静态兜底目录 + `fetchDynamicModels` 做实时发现。由于令牌归 shim 管理，该 provider 以无密钥方式注册 —— 无需在 omp 登录或配置 API 密钥。
 5. **强制刷新** —— 提供 `/workbuddy-refresh` 命令，调用 `ctx.modelRegistry.refreshProvider(...)`（默认 `online` 策略）绕过 omp 对 `fetchDynamicModels` 的 24 小时缓存，随时强制拉取上游最新模型列表。
@@ -32,7 +33,7 @@ omp 对 `fetchDynamicModels` 的动态列表有 **24 小时缓存**：正常打�
 
 行为：
 
-- 先探活上游。若未登录桌面版、或上游不可达、或返回空列表，会提示对应原因并**保留现有列表**，不会清空。
+- 先探活上游。若未登录桌面版、或凭据文件无法解密、或上游不可达、或返回空列表，会提示对应原因并**保留现有列表**，不会清空。
 - 成功则调用 `ctx.modelRegistry.refreshProvider("workbuddy")`（默认 `online` 策略，不受 24h 缓存门控）强制联网刷新。
 - 完成后弹出提示，例如 `已强制刷新：共 N 个模型，本次新增 X 个`（无新增则提示「无新增」）。
 
@@ -41,6 +42,7 @@ omp 对 `fetchDynamicModels` 的动态列表有 **24 小时缓存**：正常打�
 ## 依赖环境
 
 - Windows / macOS / Linux（支持 WSL），且**已安装并登录** WorkBuddy 桌面应用。
+- 若凭据文件被 5.6+ 静态加密，插件需能定位 WorkBuddy 可执行文件：优先 `$WORKBUDDY_ELECTRON_BIN`，其次平台默认安装位置（Windows `%LOCALAPPDATA%\Programs\WorkBuddy\WorkBuddy.exe`、macOS `/Applications/WorkBuddy.app/Contents/MacOS/Electron`），最后在 Windows 上查注册表卸载记录与 `workbuddy://` 协议登记。装在非常规位置时用 `WORKBUDDY_ELECTRON_BIN` 显式指定。
 - omp 17.4.0 或更新版本（需支持扩展 `registerProvider`）。本仓库针对内置的 `@oh-my-pi/pi-coding-agent` 类型锁定版本。
 
 ## 安装
@@ -86,7 +88,8 @@ node node_modules/typescript/lib/tsc.js --noEmit -p tsconfig.json   # 类型检�
 
 omp 加载的入口是 `src/index.ts`。其余模块：
 
-- `src/auth.ts` — 桌面端鉴权文件的发现、解析、自有副本持久化
+- `src/auth.ts` — 桌面端鉴权文件的发现、解析（含 5.6+ 加密字段解封）、自有副本持久化
+- `src/desktop-protection.ts` — WorkBuddy 5.6+ 静态加密：文件格式判定、保护钥解析（起自带 Electron 取 `atRestSecretKey`）、AES-256-GCM 字段解封
 - `src/upstream.ts` — WorkBuddy 上游 wire 客户端（chat / models / refresh）
 - `src/store.ts` — 凭据存储 + 按需刷新
 - `src/server.ts` — loopback OpenAI 兼容 shim + SSE 归一化

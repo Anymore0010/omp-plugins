@@ -11,7 +11,7 @@
     {
       "name": "omp-workbuddy-connect",
       "source": "./omp-workbuddy-connect",
-      "version": "0.1.3",
+      "version": "0.1.4",
       "description": "把 WorkBuddy 桌面版模型接入 omp（零配置复用桌面端登录态）。",
       "license": "MIT",
       "category": "provider"

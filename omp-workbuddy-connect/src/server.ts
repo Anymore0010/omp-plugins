@@ -135,12 +135,15 @@ export class WorkBuddyShim {
       return
     }
     if (req.method === "GET" && path === "/v1/status") {
-      const summary = await this.options.store.current().then((c) => ({
-        state: c === undefined ? "signed-out" : "signed-in",
+      const status = await this.options.store.status()
+      const c = status.credential
+      const summary = {
+        state: status.state,
         ...(c?.nickname !== undefined ? { nickname: c.nickname } : {}),
         ...(c?.domain !== undefined && c.domain !== "" ? { domain: c.domain } : {}),
         ...(c?.source !== undefined ? { source: c.source } : {}),
-      }))
+        ...(status.detail !== undefined ? { detail: status.detail } : {}),
+      }
       this.sendJson(res, 200, {
         provider: "workbuddy",
         auth: summary,
@@ -220,12 +223,17 @@ export class WorkBuddyShim {
   }
 
   private async handleChat(req: IncomingMessage, res: ServerResponse): Promise<void> {
-    const credential = await this.options.store.current()
+    const auth = await this.options.store.status()
+    const credential = auth.credential
     if (credential === undefined) {
+      // A file that exists but cannot be decrypted is not "signed out"; saying
+      // so would send the user to re-login for no reason.
       this.sendJson(res, 401, {
         error: {
-          message: "not signed in to WorkBuddy desktop; open the app and sign in",
-          type: "authentication_error",
+          message: auth.state === "unreadable"
+            ? `the WorkBuddy credential file could not be read: ${auth.detail ?? "unknown reason"}`
+            : "not signed in to WorkBuddy desktop; open the app and sign in",
+          type: auth.state === "unreadable" ? "credential_unreadable" : "authentication_error",
         },
       })
       return

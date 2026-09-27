@@ -101,9 +101,15 @@ export default async function workbuddyConnect(pi: ExtensionAPI): Promise<void> 
     pi.registerCommand("workbuddy-refresh", {
       description: "强制重新拉取 WorkBuddy 上游最新模型列表（绕过 omp 24h 动态发现缓存）",
       handler: async (_args, ctx) => {
-        const credential = await store.current()
+        const auth = await store.status()
+        const credential = auth.credential
         if (credential === undefined) {
-          ctx.ui.notify("WorkBuddy 未登录，无法刷新模型列表（先登录桌面版）", "error")
+          ctx.ui.notify(
+            auth.state === "unreadable"
+              ? `WorkBuddy 凭据文件无法解密：${auth.detail ?? "原因未知"}`
+              : "WorkBuddy 未登录，无法刷新模型列表（先登录桌面版）",
+            "error",
+          )
           return
         }
         const beforeIds = new Set(shim.currentModels().map(model => model.id))
