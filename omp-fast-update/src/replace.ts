@@ -151,6 +151,8 @@ export interface InstallOptions {
 export interface InstallResult {
 	path: string
 	previousVersion?: string
+	/** Backup kept beside the target as a rollback point, when one was made. */
+	backupPath?: string
 }
 
 /**
@@ -158,13 +160,14 @@ export interface InstallResult {
  *
  * Every failure after the launcher was moved aside restores it — a rename that
  * fails (a lock another process holds, a full disk) must not leave the host
- * with no `omp` at all. Only once the new binary reports the expected version
- * is the backup dropped.
+ * with no `omp` at all. On success the previous binary is kept as `<target>`
+ * plus {@link ARTIFACT_MARKER}, exactly the rollback point `omp update` leaves
+ * behind, and reclaimed by age on later runs.
  */
 export async function installStagedBinary(options: InstallOptions): Promise<InstallResult> {
 	return await withTargetLock(options.targetPath, async () => {
-		const stamp = `${ARTIFACT_MARKER}.${Date.now()}.${process.pid}.${stagingSeq++}`
-		const backupPath = `${options.targetPath}.${stamp}.bak`
+		const stamp = `${Date.now()}.${process.pid}.${stagingSeq++}`
+		const backupPath = `${options.targetPath}${ARTIFACT_MARKER}.${stamp}.bak`
 		const previousVersion = await reportedVersionAt(options.targetPath)
 
 		let backupReady = false
@@ -210,14 +213,15 @@ export async function installStagedBinary(options: InstallOptions): Promise<Inst
 			)
 		}
 
-		// Swap verified. On Windows the backup is still the running process image
-		// and cannot be unlinked until this process exits; deletion is best effort.
-		if (backupReady) await fs.promises.rm(backupPath, { force: true }).catch(() => undefined)
-		// Awaited, not fire-and-forget: a sweep outliving this lock could unlink
-		// the next process's backup mid-verify and leave it with nothing to roll
-		// back to.
+		// Swap verified. Keep the backup as a rollback point, matching what
+		// `omp update` leaves behind: it runs while the target IS the running
+		// image, so Windows refuses to unlink it and the `.bak` survives. This
+		// command runs under `bun`, where that lock does not exist — deleting
+		// here would make `omp-fast-update` the one updater that leaves no way
+		// back. The marked backup is reclaimed by age (BACKUP_KEEP_MS), so it
+		// does not accumulate.
 		await sweepStaleArtifacts(options.targetPath)
-		return { path: options.targetPath, previousVersion }
+		return { path: options.targetPath, previousVersion, backupPath: backupReady ? backupPath : undefined }
 	})
 }
 

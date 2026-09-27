@@ -157,7 +157,8 @@ export async function runFastUpdate(options: FastUpdateOptions, context: UpdateC
 	})
 	io.clearProgress()
 	io.notify(
-		`已更新到 omp/${version}（原 omp/${result.previousVersion ?? "未知"}），重启 omp 生效。`,
+		`已更新到 omp/${version}（原 omp/${result.previousVersion ?? "未知"}），重启 omp 生效。` +
+			(result.backupPath === undefined ? "" : `\n回退副本：${result.backupPath}（保留 7 天后自动回收）`),
 		"info",
 	)
 }

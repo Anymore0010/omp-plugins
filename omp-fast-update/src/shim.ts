@@ -261,15 +261,17 @@ export async function shimStatus(): Promise<ShimResult> {
 			paths: allShimFiles(dir),
 		}
 	}
-	// The shim resolves at run time, so a plugin upgrade does not invalidate it;
-	// it is only stale if no installed copy can be found at all.
-	const resolved = newestInstalledEntry()
+	// The shim resolves at run time, so neither a plugin upgrade nor a switch
+	// between the marketplace copy and a config.yml-mounted checkout invalidates
+	// it. Report the same precedence the shim itself applies.
+	const resolved = configuredSourceEntry() ?? newestInstalledEntry()
+	const origin = configuredSourceEntry() === undefined ? "marketplace 缓存" : "config.yml 挂载"
 	return {
 		ok: resolved !== undefined,
 		message:
 			resolved !== undefined
-				? `已安装（解析到 ${resolved}）`
-				: `已安装但找不到任何插件安装副本；先 omp plugin install omp-fast-update@omp-plugins`,
+				? `已安装（${origin}：${resolved}）`
+				: `已安装但找不到插件副本；先 omp plugin install omp-fast-update@omp-plugins 或在 config.yml 挂载仓库路径`,
 		paths: existing,
 	}
 }
@@ -301,11 +303,11 @@ export async function installCliShim(): Promise<ShimResult> {
 		await fs.promises.writeFile(target, bodies[index] as string, { mode: 0o755 })
 		written.push(target)
 	}
-	const resolved = newestInstalledEntry()
+	const resolved = configuredSourceEntry() ?? newestInstalledEntry()
 	return {
 		ok: true,
 		message: `已安装，新开终端后可直接运行 ${SHIM_NAME}（路径 ${dir} 已在 PATH 上）${
-			resolved === undefined ? "；注意：尚未检测到插件安装副本" : ""
+			resolved === undefined ? "；注意：尚未检测到插件副本" : ""
 		}。插件升级后无需重装。`,
 		paths: written,
 	}
