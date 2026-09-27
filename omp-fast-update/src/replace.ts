@@ -160,23 +160,18 @@ export interface InstallResult {
  *
  * Every failure after the launcher was moved aside restores it — a rename that
  * fails (a lock another process holds, a full disk) must not leave the host
- * with no `omp` at all. On success the previous binary is kept as `<target>`
- * plus {@link ARTIFACT_MARKER}, exactly the rollback point `omp update` leaves
- * behind, and reclaimed by age on later runs.
+ * with no `omp` at all. On success the previous binary is kept beside the
+ * target as `<target>` plus {@link ARTIFACT_MARKER}: the rollback point
+ * `omp update` also leaves behind. Earlier backups are reaped just before that
+ * rename, so each update adds one and removes the previous — except a backup
+ * still mapped as a running image, which Windows refuses to unlink and which is
+ * therefore reclaimed on a later run once its process exits.
  */
 export async function installStagedBinary(options: InstallOptions): Promise<InstallResult> {
 	return await withTargetLock(options.targetPath, async () => {
 		const stamp = `${Date.now()}.${process.pid}.${stagingSeq++}`
 		const backupPath = `${options.targetPath}${ARTIFACT_MARKER}.${stamp}.bak`
 		const previousVersion = await reportedVersionAt(options.targetPath)
-
-		// Reap earlier backups BEFORE creating this one, so the retained rollback
-		// point is always exactly the immediately previous version — the same
-		// steady state `omp update` reaches (it deletes its backup too; on Windows
-		// the running-image lock is what makes one survive). Doing this first also
-		// keeps the fresh backup out of the sweep's reach, so no age bookkeeping
-		// is needed to protect it.
-		await sweepStaleArtifacts(options.targetPath, { keep: options.stagedPath })
 
 		let backupReady = false
 		try {
@@ -221,10 +216,11 @@ export async function installStagedBinary(options: InstallOptions): Promise<Inst
 			)
 		}
 
-		// Swap verified. The previous binary stays beside the target as the
-		// rollback point — the steady state `omp update` also reaches. Earlier
-		// backups were already reaped before this one was created, so exactly one
-		// is kept and none accumulate.
+		// Swap verified. Keep THIS backup as the rollback point (the state
+		// `omp update` also reaches), then reap only OLDER backups, so a failed
+		// download or verify never leaves the user with no rollback copy. `keep`
+		// names this run's backup; `.new` files still age out separately.
+		await sweepStaleArtifacts(options.targetPath, { keep: backupPath })
 		return { path: options.targetPath, previousVersion, backupPath: backupReady ? backupPath : undefined }
 	})
 }
